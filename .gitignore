@@ -1,0 +1,11 @@
+env
+Backend/node_modules
+frontend/node_modules
+workspace
+Backend/env
+Backend/.env
+.envnode_modules/
+__pycache__/
+*.pyc
+.env
+curiosityenv

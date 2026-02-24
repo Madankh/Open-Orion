@@ -1,0 +1,167 @@
+/* privacy.css */
+.privacy-container {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  line-height: 1.6;
+  color: #cccbcb;
+  background: #1a1a1a;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.privacy-container h1 {
+  font-size: 2.5rem;
+  margin-bottom: 15px;
+  color: #ffffff;
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.privacy-container h2 {
+  font-size: 1.5rem;
+  margin-top: 35px;
+  margin-bottom: 15px;
+  color: #f4f7f8;
+  font-weight: 600;
+  border-bottom: 2px solid #333;
+  padding-bottom: 8px;
+}
+
+.privacy-container h3 {
+  font-size: 1.2rem;
+  margin-top: 25px;
+  margin-bottom: 10px;
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.privacy-container ul {
+  margin-left: 20px;
+  margin-bottom: 15px;
+  list-style-type: disc;
+}
+
+.privacy-container ul li {
+  margin-bottom: 8px;
+  color: #cccbcb;
+}
+
+.privacy-container p {
+  margin: 15px 0;
+  color: #cccbcb;
+}
+
+.privacy-container strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.privacy-container em {
+  color: #999;
+  font-style: italic;
+}
+
+/* Enhanced sections */
+.privacy-container section {
+  margin-bottom: 2.5rem;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  border-left: 4px solid #4a90e2;
+}
+
+/* Contact info styling */
+.contact-info {
+  background: linear-gradient(135deg, #2d2d2d, #1a1a1a);
+  padding: 20px;
+  border-radius: 12px;
+  margin: 20px 0;
+  border: 1px solid #333;
+}
+
+.contact-info p {
+  margin: 8px 0;
+  color: #f4f7f8;
+}
+
+.contact-info strong {
+  color: #4a90e2;
+}
+
+/* Footer styling */
+.policy-footer {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 2px solid #333;
+  text-align: center;
+}
+
+.policy-footer p {
+  font-style: italic;
+  color: #888;
+  margin: 5px 0;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .privacy-container {
+    margin: 20px;
+    padding: 15px;
+  }
+  
+  .privacy-container h1 {
+    font-size: 2rem;
+  }
+  
+  .privacy-container h2 {
+    font-size: 1.3rem;
+  }
+  
+  .privacy-container section {
+    padding: 15px;
+  }
+}
+
+/* Highlight important sections */
+.privacy-container section:nth-child(4) { /* Refund Policy */
+  border-left-color: #28a745;
+  background: rgba(40, 167, 69, 0.05);
+}
+
+.privacy-container section:nth-child(5) { /* Data Rights */
+  border-left-color: #ffc107;
+  background: rgba(255, 193, 7, 0.05);
+}
+
+.privacy-container section:nth-child(7) { /* Security */
+  border-left-color: #dc3545;
+  background: rgba(220, 53, 69, 0.05);
+}
+
+/* Smooth scrolling for anchor links */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Print styles */
+@media print {
+  .privacy-container {
+    background: white;
+    color: black;
+    box-shadow: none;
+  }
+  
+  .privacy-container h1,
+  .privacy-container h2,
+  .privacy-container strong {
+    color: black;
+  }
+  
+  .privacy-container section {
+    background: transparent;
+    border-left: 2px solid #000;
+  }
+}
