@@ -1,5 +1,7 @@
 # Orion Project
 
+![Orion Workspace Screenshot](c)
+
 Orion is a collaborative AI workspace where teams can chat with AI, work on documents/whiteboards, and manage project notes in one place.
 
 This README is written for both:
@@ -15,7 +17,9 @@ The full app is made of 4 running services:
 4. Redis (for caching/rate limiting/session-related tasks).
 
 It also uses MongoDB (external connection from environment variables).
+## 🎥 Demo Video
 
+[![Watch Orion Demo](https://ph-files.imgix.net/f412e6d4-4885-4693-98ea-b6e72c171734.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&fm=pjpg&w=1100&h=619&fit=max&frame=1&dpr=1)]([https://vimeo.com/1167596581](https://vimeo.com/1167596581?share=copy&fl=sv&fe=ci))
 ## High-level architecture (simple)
 
 1. You open the web app in your browser (`http://localhost:3000`).
@@ -403,3 +407,9 @@ curl http://localhost:8000/health
 ## Notes for maintainers
 
 If you update service ports, route prefixes, or env var names, update this README immediately so non-technical users can continue to run the project without confusion.
+
+![View]([https://ph-files.imgix.net/4be203a4-dbae-47a7-89c9-76e9a6911615.png?... ](https://ph-files.imgix.net/f412e6d4-4885-4693-98ea-b6e72c171734.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&fm=pjpg&w=1100&h=619&fit=max&frame=1&dpr=1))
+
+![View]([https://ph-files.imgix.net/82977fe9-3cc2-4ebf-aded-0e5d6895aa5b.png?... )](https://ph-files.imgix.net/82977fe9-3cc2-4ebf-aded-0e5d6895aa5b.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&fm=pjpg&w=1100&h=619&fit=max&frame=1&dpr=1)
+
+![Overview]([https://ph-files.imgix.net/f97ebcde-0665-4639-83dc-8e5fd0573ec8.png?... ](https://ph-files.imgix.net/f97ebcde-0665-4639-83dc-8e5fd0573ec8.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&fm=pjpg&w=1100&h=619&fit=max&frame=1&dpr=1))
