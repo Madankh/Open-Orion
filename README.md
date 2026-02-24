@@ -1,6 +1,5 @@
 # Orion Project
 
-![Orion Workspace Screenshot](c)
 
 Orion is a collaborative AI workspace where teams can chat with AI, work on documents/whiteboards, and manage project notes in one place.
 
@@ -19,7 +18,7 @@ The full app is made of 4 running services:
 It also uses MongoDB (external connection from environment variables).
 ## 🎥 Demo Video
 
-[![Watch Orion Demo](https://ph-files.imgix.net/f412e6d4-4885-4693-98ea-b6e72c171734.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&fm=pjpg&w=1100&h=619&fit=max&frame=1&dpr=1)]([https://vimeo.com/1167596581](https://vimeo.com/1167596581?share=copy&fl=sv&fe=ci))
+[![Watch Orion Demo]([https://vimeo.com/1167596581](https://vimeo.com/1167596581?share=copy&fl=sv&fe=ci)]
 ## High-level architecture (simple)
 
 1. You open the web app in your browser (`http://localhost:3000`).
