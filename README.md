@@ -223,6 +223,8 @@ Do not commit real secrets to git.
 
 ### `.env` (Python AI backend)
 
+Canvas PDF parsing uses OpenParser's hosted PaddleOCR-VL model. Set `OPENPARSER_API_KEY` only on the Python backend; parsing sends the uploaded PDF to OpenParser and is billed per page by your OpenParser account.
+
 ```env
 MONGODB_URI=<your_mongodb_uri>
 MONGODB_DATABASE=<db_name>
@@ -247,6 +249,7 @@ TAVILY_API_KEY_SEARCH=<optional>
 FIRECRAWL_API_KEY=<optional>
 REPLICATE_API_TOKEN=<optional>
 FAL_KEY=<optional>
+OPENPARSER_API_KEY=<server_side_openparser_api_key>
 
 SEARCH_PROVIDER=tavily
 SCRAPER_PROVIDER=firecrawl
@@ -256,10 +259,14 @@ SCRAPE_URL_TIMEOUT=30
 
 NODE_API_BASE_URL=http://localhost:5000/api/token
 
-BUCKET_NAME=<optional_s3_bucket>
-BUCKET_REGION=<optional_s3_region>
-ACCESS_KEY=<optional_s3_access_key>
-Secret_access_key=<optional_s3_secret>
+R2_ACCOUNT_ID=<cloudflare_account_id>
+R2_BUCKET_NAME=<r2_bucket_name>
+R2_ACCESS_KEY_ID=<r2_access_key_id>
+R2_SECRET_ACCESS_KEY=<r2_secret_access_key>
+# Optional: defaults to https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com
+R2_ENDPOINT_URL=<optional_r2_s3_api_endpoint>
+# Optional: public custom domain or enabled r2.dev base URL for the bucket
+R2_PUBLIC_BASE_URL=<optional_public_bucket_base_url>
 
 QDRANT_URL=<optional>
 QDRANT_API_KEY=<optional>
@@ -273,6 +280,12 @@ CLAMAV_HOST=localhost
 CLAMAV_PORT=3310
 CLAMAV_TIMEOUT=30
 ```
+
+Set the R2 credentials in `.env` before restarting the AI backend. R2 buckets
+are private by default, so leave `R2_PUBLIC_BASE_URL` unset unless the bucket
+has been explicitly exposed through a custom domain or an enabled `r2.dev` URL.
+Existing AWS S3 objects are not copied automatically; copy them into R2 with
+their current object keys before relying on R2 downloads for those files.
 
 ### `.env.backend` (Node backend)
 

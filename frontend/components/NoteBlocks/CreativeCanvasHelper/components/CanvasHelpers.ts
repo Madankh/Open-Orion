@@ -205,10 +205,10 @@ export const extractYoutubeId = (url: string): string | null => {
 export const apiService = {
     downloadFile: async (sessionId: string, s3Key: string, accessToken: string) => {
         try {
-            let cleanS3Key = s3Key;
-            if (cleanS3Key.startsWith('/workspace/')) {
-                cleanS3Key = cleanS3Key.substring(11);
-            }
+            const localWorkspacePrefix = `${pythonUrl}/workspace/`;
+            const cleanS3Key = s3Key.startsWith(localWorkspacePrefix)
+                ? s3Key.slice(localWorkspacePrefix.length)
+                : s3Key.replace(/^\/workspace\//, '');
 
             const response = await fetch(`${API_BASE_URL}/download`, {
                 method: 'POST',
@@ -218,7 +218,7 @@ export const apiService = {
 
             if (!response.ok) return null;
             const result = await response.json();
-            return `${pythonUrl}${result.file?.path}`;
+            return result.file?.path ? `${pythonUrl}${result.file.path}` : null;
         } catch (error) {
             console.error('❌ Error downloading file:', error);
             return null;
@@ -231,20 +231,32 @@ export const apiService = {
             headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sessionId, file })
         });
-        if (!response.ok) throw new Error("Upload failed");
-        return await response.json(); // Returns { file: { s3_key, path } }
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(result.detail || result.message || `Upload failed (${response.status})`);
+        }
+        if (result.file?.storage_backend !== 'r2' || !result.file?.s3_key) {
+            throw new Error('Cloud file storage is unavailable. Configure Cloudflare R2 before uploading persistent canvas files.');
+        }
+        return result; // Returns { file: { s3_key, path, storage_backend: 'r2' } }
     },
 
     saveNode: async (sessionId: string, nodeId: string, data: any, accessToken: string) => {
         try {
-            await fetch(`${API_BASE_URL}/nodes/${sessionId}/${nodeId}?branch_id=main`, {
+            const response = await fetch(`${API_BASE_URL}/nodes/${sessionId}/${nodeId}?branch_id=main`, {
                 method: 'PATCH',
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            // console.log('✅ Saved node data:', nodeId);
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                console.error('❌ Node save rejected:', nodeId, response.status, result.detail || result.message || 'Unknown error');
+                return false;
+            }
+            return true;
         } catch (error) {
             console.error('❌ Error saving node:', error);
+            return false;
         }
     },
 
@@ -283,3 +295,21 @@ export const apiService = {
         } catch(e) { console.error("Connection save failed", e); }
     }
 };
+
+/** Replace persisted editor-image URLs with fresh workspace URLs after a reload. */
+export async function restoreInlineImageSources(content: string, accessToken?: string): Promise<string> {
+    if (!accessToken || typeof DOMParser === 'undefined' || !/data-s3-key\s*=/i.test(content)) return content;
+
+    const parsed = new DOMParser().parseFromString(content, 'text/html');
+    const images = Array.from(parsed.body.querySelectorAll<HTMLImageElement>('img[data-s3-key]'));
+    await Promise.all(images.map(async image => {
+        const s3Key = image.dataset.s3Key;
+        if (!s3Key) return;
+        const ownerSessionId = s3Key.replace(/^\/+/, '').split('/')[0];
+        if (!ownerSessionId) return;
+        const restoredUrl = await apiService.downloadFile(ownerSessionId, s3Key, accessToken);
+        if (restoredUrl) image.src = restoredUrl;
+    }));
+
+    return parsed.body.innerHTML;
+}

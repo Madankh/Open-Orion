@@ -33,7 +33,7 @@ app.use(cors(corsOptions));
 app.set("trust proxy", 1);
 app.use(session({
   name: "sid",
-  secret: process.env.SESSION_SECRET,
+  secret: "DFKJja38",
   resave: false,
   saveUninitialized: false,
   cookie: {

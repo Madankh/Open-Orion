@@ -11,12 +11,16 @@ interface SessionNoteEditorProps {
   sessionId: string;
   onClose: () => void;
   initialBlocks?: Block[];
+  rightOffsetPx?: number;
+  widthPx?: number;
 }
 
 const SessionNoteEditor: React.FC<SessionNoteEditorProps> = ({ 
   sessionId, 
   onClose,
-  initialBlocks 
+  initialBlocks,
+  rightOffsetPx = 8,
+  widthPx = 800
 }) => {
   const user = useSelector((state: RootState) => state.user);
   const accessToken = user?.accessToken || '';
@@ -115,6 +119,9 @@ const SessionNoteEditor: React.FC<SessionNoteEditorProps> = ({
   }, []);
 
   const handleBlockTextChange = useCallback((id: number, content: string) => {
+    // Any edit invalidates an already-open slash menu. If the edit is still
+    // part of a slash command, TextBlock will immediately open it again.
+    setShowSlashMenu(false);
     setBlocks(prev => {
       const targetBlock = prev.find(b => b.id === id);
       if (targetBlock && targetBlock.content === content) return prev;
@@ -221,9 +228,17 @@ const SessionNoteEditor: React.FC<SessionNoteEditorProps> = ({
       <div 
         className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60] animate-in fade-in duration-300"
         onClick={onClose}
+        onWheel={event => event.stopPropagation()}
+        onMouseDown={event => event.stopPropagation()}
       />
 
-      <div className="fixed top-2 bottom-2 right-2 w-[800px] max-w-[90vw] z-[70] flex flex-col bg-[#0F1117]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+      <div
+        data-editor-sidebar
+        className="fixed top-2 bottom-2 max-w-[90vw] z-[70] flex flex-col bg-[#0F1117]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden transition-[right,width] duration-200"
+        style={{ right: rightOffsetPx, width: widthPx }}
+        onWheel={event => event.stopPropagation()}
+        onMouseDown={event => event.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-white/5 shrink-0">
@@ -246,7 +261,7 @@ const SessionNoteEditor: React.FC<SessionNoteEditorProps> = ({
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain custom-scrollbar relative">
           {isLoading ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
               <Loader2 className="animate-spin text-blue-500" size={32} />

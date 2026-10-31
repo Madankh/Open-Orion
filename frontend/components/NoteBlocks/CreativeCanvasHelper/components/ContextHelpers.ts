@@ -1,4 +1,4 @@
-import { NodeData, Connection } from '@/typings/agent';
+import { NodeData, Connection, ColorTheme } from '@/typings/agent';
 import {isGroupNode} from '../components/CanvasHelpers';
 
 // 1. Context Types
@@ -95,6 +95,28 @@ export interface SmartNodeContext {
   groupInfo: GroupInfo | null;
   isQueryingGroup: boolean;
 }
+
+export interface Card {
+  id: string;
+  projectId: string;
+  type: 'text' | 'image' | 'pdf' | 'youtube' | 'excerpt';
+  title: string;
+  content: string;                 // editor JSON/HTML
+  media?: { url: string; s3Key: string; fileName: string; fileType: string };
+  source?: { pdfUrl: string; pageNumber: number; boundingBox: any }; // your pdfSource
+  createdAt: number; updatedAt: number;
+}
+
+export interface Placement {
+  id: string; canvasId: string;
+  kind: 'note' | 'card' | 'group';
+  cardId: string | null;           // set only when kind === 'card'
+  // note-only inline content (exactly what NodeData has now)
+  title?: string; content?: string; media?: { url: string; s3Key: string; fileName: string; fileType: string };
+  x: number; y: number; width: number; height: number;
+  color: ColorTheme; parentId?: string;
+}
+
 
 export interface GroupInfo {
   group_id: string;

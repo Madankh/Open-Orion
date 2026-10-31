@@ -81,6 +81,12 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
   const accessToken = user?.accessToken;
   const searchParams = useSearchParams();
   const SessionId = searchParams.get("ChannelItemID") || searchParams.get("id");
+  const toWorkspaceUrl = (path?: string) => {
+    if (!path) return '';
+    if (/^(https?:|blob:|data:)/i.test(path)) return path;
+    return `${pythonUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+  };
+  const uploadedMediaUrl = toWorkspaceUrl(block.url);
   const getDocumentTypeDisplay = () => {
     if (!block.name) return 'Document';
 
@@ -114,7 +120,7 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
         return (
           <div className="relative group">
             <img
-              src={`${pythonUrl}${block.url}`}
+              src={uploadedMediaUrl}
               alt={block.name || 'Uploaded image'}
               className="w-full h-48 object-cover rounded-lg"
             />
@@ -136,7 +142,7 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
                 {/* Open image button */}
                 {block.url && (
                   <button
-                    onClick={() => window.open(block.url, '_blank')}
+                    onClick={() => window.open(uploadedMediaUrl, '_blank')}
                     className="p-2 bg-gray-600 hover:bg-gray-700 text-white rounded-full transition-colors shadow-lg"
                     title="Open image"
                   >
@@ -171,7 +177,7 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
         return (
           <div className="relative group">
             <video
-              src={block.src || block.url}
+              src={block.status === 'uploaded' && block.url ? uploadedMediaUrl : block.src || uploadedMediaUrl}
               className="w-full h-48 object-cover rounded-lg"
               poster={block.thumbnail}
             >
@@ -194,7 +200,7 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
 
                 {/* Play/Open button */}
                 <button
-                  onClick={() => window.open(block.url, '_blank')}
+                  onClick={() => window.open(uploadedMediaUrl, '_blank')}
                   className="p-2 bg-gray-600 hover:bg-gray-700 text-white rounded-full transition-colors shadow-lg"
                   title="Open video"
                 >
@@ -245,7 +251,7 @@ const MediaBlock: React.FC<MediaBlockProps> = ({
               </div>
             </div>
             <audio controls className="w-full">
-              <source src={block.src || block.url} />
+              <source src={block.status === 'uploaded' && block.url ? uploadedMediaUrl : block.src || uploadedMediaUrl} />
             </audio>
           </div>
         );

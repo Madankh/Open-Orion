@@ -24,6 +24,7 @@ python-dotenv
 python-jose
 jsonschema
 aiohttp
+openparser-sdk>=1.0.11,<2.0
 pymupdf
 colorama
 langchain_cohere

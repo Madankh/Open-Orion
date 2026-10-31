@@ -552,9 +552,17 @@ const QuestionInput = ({
         )}
 
         <Textarea
-          className={`w-full p-4 pb-[72px] rounded-xl !text-lg focus:ring-0 resize-none !placeholder-gray-400 !bg-[#35363a] border-[#ffffff0f] shadow-[0px_0px_10px_0px_rgba(0,0,0,0.02)] ${
+          className={`w-full p-4 pb-[72px] rounded-xl !text-lg !text-slate-900 focus:ring-0 resize-none !placeholder-slate-500 !bg-white border-slate-200 shadow-[0px_0px_10px_0px_rgba(0,0,0,0.02)] ${
             files.length > 0 ? "pt-24 h-60" : "h-50"
           } ${textareaClassName}`}
+          style={{
+            backgroundColor: '#ffffff',
+            backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)',
+            backgroundSize: '20px 20px',
+            color: '#111827',
+            WebkitTextFillColor: '#111827',
+            caretColor: '#111827',
+          }}
           placeholder={getPlaceholder()}
           value={value}
           ref={textareaRef} 
@@ -573,18 +581,25 @@ const QuestionInput = ({
           />
         )}
 
-        <div className="flex justify-between items-center absolute bottom-0 py-4 m-px w-[calc(100%-4px)] rounded-b-xl bg-[#35363a] px-4">
+        <div
+          className="flex justify-between items-center absolute bottom-0 py-4 m-px w-[calc(100%-4px)] rounded-b-xl bg-white px-4"
+          style={{
+            backgroundColor: '#ffffff',
+            backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)',
+            backgroundSize: '20px 20px',
+          }}
+        >
           <div className="flex items-center gap-x-3">
             {handleFileUpload && (
               <label htmlFor="file-upload" className="cursor-pointer">
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="hover:bg-gray-700/50 size-10 rounded-full cursor-pointer border border-[#ffffff0f] shadow-sm"
+                  className="hover:bg-slate-100 size-10 rounded-full cursor-pointer border border-slate-200 shadow-sm"
                   onClick={() => document.getElementById("file-upload")?.click()}
                   disabled={isUploading || isProcessing}
                 >
-                  {isUploading ? <Loader2 className="size-5 text-gray-400 animate-spin" /> : <Paperclip className="size-5 text-gray-400" />}
+                  {isUploading ? <Loader2 className="size-5 text-slate-500 animate-spin" /> : <Paperclip className="size-5 text-slate-500" />}
                 </Button>
                 <input id="file-upload" type="file" accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.json,.xml" multiple className="hidden" onChange={handleFileChange} disabled={isUploading || isProcessing} />
               </label>
@@ -596,11 +611,11 @@ const QuestionInput = ({
                 variant="ghost"
                 size="icon"
                 onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                className="hover:bg-gray-700/50 size-10 rounded-full cursor-pointer border border-[#ffffff0f] shadow-sm"
+                className="hover:bg-slate-100 size-10 rounded-full cursor-pointer border border-slate-200 shadow-sm"
                 disabled={isProcessing}
                 title={`Current model: ${currentModel.name}`}
               >
-                <Bot className="size-5 text-gray-400" />
+                <Bot className="size-5 text-slate-500" />
               </Button>
 
               {isModelDropdownOpen && !isProcessing && (
@@ -644,7 +659,7 @@ const QuestionInput = ({
                 variant="ghost"
                 size="icon"
                 onClick={() => setIsModeDropdownOpen(!isModeDropdownOpen)}
-                className="hover:bg-gray-700/50 size-10 rounded-full cursor-pointer border border-[#ffffff0f] shadow-sm"
+                className="hover:bg-slate-100 size-10 rounded-full cursor-pointer border border-slate-200 shadow-sm"
                 disabled={isProcessing}
                 title={`Current mode: ${currentMode.name}`}
               >

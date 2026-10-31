@@ -7,7 +7,9 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import katex from 'katex';
 import { marked } from 'marked';
+import { normalizeMarkdownContent } from '@/utils/markdown-content';
 
 // Lazy load the TipTap editor
 const TipTapEditor = lazy(() => import('./TipTapEditor'));
@@ -101,15 +103,9 @@ const convertMarkdownToHtml = (content: string): string => {
   const hasHtmlTags = /<[a-z][\s\S]*>/i.test(content);
   if (hasHtmlTags) return content;
   
-  // Check if content looks like markdown
-  const hasMarkdownSyntax = /[*_#`\[\]]/g.test(content);
-  if (!hasMarkdownSyntax) {
-    return `<p>${content}</p>`;
-  }
-  
   // Convert markdown to HTML
   try {
-    return marked.parse(content) as string;
+    return marked.parse(normalizeMarkdownContent(content), { async: false, gfm: true }) as string;
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
     return `<p>${content}</p>`;
@@ -175,11 +171,17 @@ const TextBlock: React.FC<TextBlockProps> = ({
       /data-type="taskList"/i 
     ];
     
-    return richFormatting.some(pattern => pattern.test(content));
+    const normalizedContent = normalizeMarkdownContent(content);
+    const hasMarkdownTable = /^\s*\|.*\|\s*$/m.test(normalizedContent) &&
+      /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(normalizedContent);
+    const hasInlineMath = /(^|[^\\$])\$[^$\n]+\$(?!\d)/.test(normalizedContent);
+
+    return richFormatting.some(pattern => pattern.test(content)) || hasMarkdownTable || hasInlineMath;
   };
 
   const MessageMarkdown = ({ children }: { children: string | null | undefined }) => {
     if (!children) return null;
+    const displayContent = /<[a-z][\s\S]*>/i.test(children) ? children : normalizeMarkdownContent(children);
     
     return (
       <div className="markdown-body">
@@ -187,12 +189,31 @@ const TextBlock: React.FC<TextBlockProps> = ({
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
           components={{
+            table: ({ node, ...props }: any) => (
+              <div className="my-3 max-w-full overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
+                <table className="m-0 min-w-max border-collapse text-xs" {...props} />
+              </div>
+            ),
+            th: ({ node, ...props }: any) => <th className="border border-slate-200 bg-slate-50 px-2 py-1.5 text-left font-semibold dark:border-slate-700 dark:bg-slate-800" {...props} />,
+            td: ({ node, ...props }: any) => <td className="border border-slate-200 px-2 py-1.5 align-top dark:border-slate-700" {...props} />,
+            span: ({ node, ...props }: any) => {
+              if (props['data-type'] === 'inline-math') {
+                let html = props['data-latex'] || '';
+                try {
+                  html = katex.renderToString(html, { throwOnError: false, displayMode: props['data-display'] === 'true' });
+                } catch {
+                    // Keep the stored source readable if KaTeX cannot render it.
+                }
+                return <span className="inline-math" dangerouslySetInnerHTML={{ __html: html }} />;
+              }
+              return <span {...props} />;
+            },
             a: ({ ...props }) => (
               <a target="_blank" rel="noopener noreferrer" {...props} />
             ),
           }}
         >
-          {children}
+          {displayContent}
         </ReactMarkdown>
       </div>
     );
@@ -243,7 +264,9 @@ const TextBlock: React.FC<TextBlockProps> = ({
     
     if (lastSlashIndex !== -1 && (lastSlashIndex === 0 || text[lastSlashIndex - 1] === ' ' || text[lastSlashIndex - 1] === '\n')) {
       const afterSlash = beforeCursor.substring(lastSlashIndex + 1);
-      if (afterSlash.length >= 0) {
+      // Keep the menu scoped to the current line; an earlier slash should not
+      // keep reopening it after the user starts a new line.
+      if (!/[\r\n]/.test(afterSlash)) {
         const rect = e.target.getBoundingClientRect();
         onSlashCommand({ x: rect.left, y: rect.top + 20 }, block.id);
       }

@@ -2,6 +2,7 @@
 
 import { NodeData, Connection } from '@/typings/agent';
 import { API_BASE_URL, extractYoutubeId } from '../components/CanvasHelpers'; 
+import { pythonUrl } from '@/apiurl';
 
 // ============================================
 // TYPES & CONSTANTS
@@ -113,17 +114,25 @@ async function internalDownloadS3(
   accessToken: string
 ): Promise<string | null> {
   try {
+    const localWorkspacePrefix = `${pythonUrl}/workspace/`;
+    const normalizedS3Key = s3Key.startsWith(localWorkspacePrefix)
+      ? s3Key.slice(localWorkspacePrefix.length)
+      : s3Key.replace(/^\/workspace\//, '');
     const response = await fetch(`${API_BASE_URL}/download`, {
       method: 'POST',
       headers: { 
         'Authorization': `Bearer ${accessToken}`, 
         'Content-Type': 'application/json' 
       },
-      body: JSON.stringify({ session_id: sessionId, s3_key: s3Key })
+      body: JSON.stringify({ session_id: sessionId, s3_key: normalizedS3Key })
     });
     if (!response.ok) return null;
     const data = await response.json();
-    return `${data.url}` || null; // This is the signed URL you need
+    const filePath = data.file?.path;
+    if (!filePath) return null;
+    return /^https?:\/\//i.test(filePath)
+      ? filePath
+      : `${pythonUrl}${filePath.startsWith('/') ? '' : '/'}${filePath}`;
   } catch (error) {
     return null;
   }

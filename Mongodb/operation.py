@@ -41,6 +41,8 @@ class NotepadCanvasOperations:
         self.canvas_nodes = self.db.canvas_nodes
         self.canvas_branches = self.db.canvas_branches
         self.canvas_connections = self.db.canvas_connections
+        self.cards = self.db.cards
+        self.card_links = self.db.card_links
         self.canvas_events = self.db.canvas_events
         self.user_presence = self.db.user_presence
         self.canvas_backups = self.db.canvas_backups
@@ -102,6 +104,29 @@ class NotepadCanvasOperations:
         await self.canvas_nodes.create_index([("parent_id", 1)])
         await self.canvas_nodes.create_index([("node_type", 1)])
         await self.canvas_nodes.create_index([("last_modified", -1)])
+        await self.canvas_nodes.create_index([("card_id", 1)])
+
+        # Cards are user-owned records that can be placed on multiple canvases.
+        await self.cards.create_index(
+            [("card_id", 1)],
+            unique=True,
+            partialFilterExpression={"card_id": {"$type": "string"}},
+        )
+        await self.cards.create_index([("owner_id", 1), ("updated_at", -1)])
+        await self.cards.create_index([("owner_id", 1), ("tags", 1)])
+
+        # Links are directional, user-managed card relations.
+        await self.card_links.create_index(
+            [("link_id", 1)],
+            unique=True,
+            partialFilterExpression={"link_id": {"$type": "string"}},
+        )
+        await self.card_links.create_index(
+            [("owner_id", 1), ("source_card_id", 1), ("target_card_id", 1)],
+            unique=True,
+        )
+        await self.card_links.create_index([("source_card_id", 1)])
+        await self.card_links.create_index([("target_card_id", 1)])
         
         # Canvas Branches Collection
         await self.canvas_branches.create_index([("parent_branch_id", 1)])
@@ -1309,7 +1334,7 @@ class NotepadCanvasOperations:
                 filter_query,
                 {'$set': update_data}
             )
-            return result.modified_count > 0
+            return result.matched_count > 0
         except Exception as e:
             logger.error(f"Error updating canvas node: {e}")
             raise

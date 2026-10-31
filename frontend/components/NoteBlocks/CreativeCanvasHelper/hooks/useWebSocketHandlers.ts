@@ -11,6 +11,7 @@ interface StreamingState {
 
 interface UseWebSocketHandlersProps {
   socket: WebSocket | null;
+  enabled?: boolean;
   nodesRef: React.RefObject<NodeData[]>;
   connectionsRef: React.RefObject<Connection[]>;
   canvas: {
@@ -30,6 +31,7 @@ interface UseWebSocketHandlersProps {
 
 export const useWebSocketHandlers = ({
   socket,
+  enabled = true,
   nodesRef,
   connectionsRef,
   canvas,
@@ -52,7 +54,8 @@ export const useWebSocketHandlers = ({
   const createdNodesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!socket) {
+    if (!socket || !enabled) {
+      if (!enabled) return;
       console.log('❌ No socket provided to WebSocket handlers');
       return;
     }
@@ -420,7 +423,7 @@ export const useWebSocketHandlers = ({
       socket.removeEventListener('error', handleError);
       socket.removeEventListener('close', handleClose);
     };
-  }, [socket, canvas.selectedNodeId, isCollaborativeMode, collab, setIsLoading, setIsCompleted, setLocalNodes, setLocalConnections, nodesRef]);
+  }, [socket, enabled, canvas.selectedNodeId, isCollaborativeMode, collab, setIsLoading, setIsCompleted, setLocalNodes, setLocalConnections, nodesRef]);
 
   return { streamingState };
 };

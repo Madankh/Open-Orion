@@ -1,6 +1,8 @@
 // TipTapEditor.tsx - Separate file for lazy loading
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { Node, mergeAttributes } from '@tiptap/core';
+import { ReactNodeViewRenderer, NodeViewWrapper } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight';
 import { Color } from '@tiptap/extension-color';
@@ -18,6 +20,10 @@ import { TextAlign } from '@tiptap/extension-text-align';
 import { Underline } from '@tiptap/extension-underline';
 import { Highlight } from '@tiptap/extension-highlight';
 import { marked } from 'marked';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
+import { normalizeMarkdownContent } from '@/utils/markdown-content';
+import TableControls from './CreativeCanvasHelper/components/TableControls';
 import {
   Bold, Italic, Strikethrough, Highlighter, Heading1, Heading2, Heading3,Link2, Palette, X
 } from 'lucide-react';
@@ -31,20 +37,131 @@ interface TipTapEditorProps {
   onSlashCommand?: (position: { x: number; y: number }, blockId: number) => void;
 }
 const darkMode = false;
-// Convert markdown to HTML
+const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escapeAttr = (value: string) => escapeHtml(value).replace(/"/g, '&quot;');
+const renderTex = (latex: string, display = false) => {
+  try {
+    return katex.renderToString(latex, { throwOnError: false, displayMode: display });
+  } catch {
+    return escapeHtml(latex);
+  }
+};
+const mathSpan = (latex: string, display: boolean) =>
+  `<span data-type="inline-math" data-latex="${escapeAttr(latex)}"${display ? ' data-display="true"' : ''}>$${escapeHtml(latex)}$</span>`;
+const INLINE_MATH_RE = /(^|[^\\$])\$[ \t]*([^$\n]+?)[ \t]*\$(?!\d)/g;
+const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$/g;
+
+const isMathExpression = (value: string) => {
+  const expression = value.trim();
+  return /^[A-Za-z]$/.test(expression) ||
+    /^[A-Za-z][A-Za-z0-9]*(?:[_^][A-Za-z0-9{}]+)$/.test(expression) ||
+    /[\\_^{}=<>+\-*/()[\]]/.test(expression);
+};
+
+const stashMath = (source: string, math: Array<{ latex: string; display: boolean }>) => source
+  .replace(DISPLAY_MATH_RE, (_match, latex) => {
+    math.push({ latex: latex.trim(), display: true });
+    return `zzmath${math.length - 1}zz`;
+  })
+  .replace(INLINE_MATH_RE, (match, prefix, latex) => {
+    if (!isMathExpression(latex)) return match;
+    math.push({ latex: latex.trim(), display: false });
+    return `${prefix}zzmath${math.length - 1}zz`;
+  });
+
+const injectMathIntoHtml = (html: string) => {
+  let codeDepth = 0;
+  let inMathSpan = false;
+  return html.split(/(<[^>]+>)/g).map(part => {
+    if (part.startsWith('<')) {
+      if (/^<(pre|code)\b/i.test(part)) codeDepth += 1;
+      else if (/^<\/(pre|code)\b/i.test(part)) codeDepth = Math.max(0, codeDepth - 1);
+      else if (/^<span\b[^>]*data-type="inline-math"/i.test(part)) inMathSpan = true;
+      else if (inMathSpan && /^<\/span>/i.test(part)) inMathSpan = false;
+      return part;
+    }
+    if (codeDepth > 0 || inMathSpan || !part.includes('$')) return part;
+    const math: Array<{ latex: string; display: boolean }> = [];
+    const stashed = stashMath(part, math);
+    return stashed.replace(/zzmath(\d+)zz/g, (_match, index) => {
+      const item = math[Number(index)];
+      return mathSpan(item.latex, item.display);
+    });
+  }).join('');
+};
+
+const MathView = ({ node, updateAttributes }: any) => {
+  const html = useMemo(() => renderTex(node.attrs.latex || '', Boolean(node.attrs.display)), [node.attrs.latex, node.attrs.display]);
+  return (
+    <NodeViewWrapper
+      as="span"
+      className="inline-math"
+      contentEditable={false}
+      title="Double-click to edit LaTeX"
+      onDoubleClick={() => {
+        const next = window.prompt('Edit LaTeX', node.attrs.latex || '');
+        if (next !== null && next.trim()) updateAttributes({ latex: next.trim() });
+      }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+};
+
+const InlineMath = Node.create({
+  name: 'inlineMath',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      latex: {
+        default: '',
+        parseHTML: element => element.getAttribute('data-latex') || '',
+        renderHTML: attributes => ({ 'data-latex': attributes.latex }),
+      },
+      display: {
+        default: false,
+        parseHTML: element => element.getAttribute('data-display') === 'true',
+        renderHTML: attributes => attributes.display ? { 'data-display': 'true' } : {},
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'span[data-type="inline-math"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['span', mergeAttributes(HTMLAttributes, { 'data-type': 'inline-math', class: 'inline-math' }), `$${HTMLAttributes['data-latex'] ?? ''}$`];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(MathView);
+  },
+});
+
+// Convert markdown to editor HTML without losing PDF formulas or table cells.
 const convertMarkdownToHtml = (content: string): string => {
   if (!content) return '<p></p>';
   const hasHtmlTags = /<[a-z][\s\S]*>/i.test(content);
-  if (hasHtmlTags) return content;
-  const hasMarkdownSyntax = /[*_#`\[\]]/g.test(content);
-  if (!hasMarkdownSyntax) return `<p>${content}</p>`;
+  if (hasHtmlTags && !looksLikeMarkdown(content)) return injectMathIntoHtml(content);
   try {
-    return marked.parse(content) as string;
+    const normalized = normalizeMarkdownContent(content);
+    const math: Array<{ latex: string; display: boolean }> = [];
+    const parts = normalized.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g);
+    const markdownWithMath = parts.map((part, index) => index % 2 === 1 ? part : stashMath(part, math)).join('');
+    const html = marked.parse(markdownWithMath, { async: false, gfm: true, breaks: true }) as string;
+    return html.replace(/zzmath(\d+)zz/g, (_match, index) => {
+      const item = math[Number(index)];
+      return mathSpan(item.latex, item.display);
+    });
   } catch (error) {
     console.error('Error converting markdown to HTML:', error);
-    return `<p>${content}</p>`;
+    return `<p>${escapeHtml(content)}</p>`;
   }
 };
+
+const looksLikeMarkdown = (text: string) =>
+  /(^|\s)#{1,6}\s+\S|\*\*[^*]+\*\*|\$[^$\n]+\$|^\s*[-*+]\s+\S|^\s*\d+\.\s+\S|`[^`]+`|^\s*>\s/m.test(text) ||
+  (/^\s*\|.*\|\s*$/m.test(text) && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(text));
 
 const MenuButton = ({ onClick, isActive, icon, label, className = '' }: any) => (
   <button
@@ -273,14 +390,18 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   onSlashCommand
 }) => {
   const lowlight = createLowlight(common);
+  const editorRef = useRef<any>(null);
 
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
       StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         codeBlock: false,
+        link: false,
+        underline: false,
       }),
+      InlineMath,
       CodeBlockLowlight.configure({ lowlight }),
       TextStyle,
       Color,
@@ -303,6 +424,17 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
       attributes: {
         class: `focus:outline-none p-2 ${darkMode ? 'text-white' : 'text-gray-900'} leading-relaxed min-h-[100px]`,
       },
+      handlePaste: (view, event) => {
+        const clipboard = event.clipboardData;
+        if (!clipboard) return false;
+        const text = clipboard.getData('text/plain');
+        if (!text || clipboard.getData('text/html')) return false;
+        const normalizedText = normalizeMarkdownContent(text);
+        if (view.state.selection.$from.parent.type.name === 'codeBlock' || !looksLikeMarkdown(normalizedText)) return false;
+        event.preventDefault();
+        editorRef.current?.chain().focus().insertContent(convertMarkdownToHtml(normalizedText)).run();
+        return true;
+      },
       handleKeyDown: (view, event) => {
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           if (onBlur) onBlur();
@@ -321,6 +453,7 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
       
     },
   });
+  editorRef.current = editor;
 
   useEffect(() => {
     if (editor && content) {
@@ -338,6 +471,7 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
   return (
     <div className={`tiptap-wrapper ${darkMode ? 'dark-mode' : ''}`}>
       <BubbleMenu editor={editor} darkMode={darkMode} />
+      <TableControls editor={editor} darkMode={darkMode} />
       <EditorContent editor={editor} />
       
       <style jsx global>{`
@@ -361,6 +495,24 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
           font-weight: 600;
           margin: 0.5em 0;
           color: ${darkMode ? '#d1d5db' : '#444'};
+        }
+        .tiptap-wrapper .ProseMirror h4 {
+          font-size: 1.1em;
+          font-weight: 600;
+          margin: 0.45em 0;
+          color: ${darkMode ? '#d1d5db' : '#444'};
+        }
+        .tiptap-wrapper .ProseMirror h5 {
+          font-size: 1em;
+          font-weight: 600;
+          margin: 0.4em 0;
+          color: ${darkMode ? '#d1d5db' : '#555'};
+        }
+        .tiptap-wrapper .ProseMirror h6 {
+          font-size: 0.95em;
+          font-weight: 700;
+          margin: 0.35em 0;
+          color: ${darkMode ? '#d1d5db' : '#555'};
         }
         .tiptap-wrapper .ProseMirror p {
           margin-bottom: 0.5em;
@@ -412,11 +564,15 @@ const TipTapEditor: React.FC<TipTapEditorProps> = ({
         }
         .tiptap-wrapper .ProseMirror table {
           border-collapse: collapse;
-          width: 100%;
+          display: block;
+          width: max-content;
+          max-width: 100%;
+          overflow-x: auto;
           margin: 0.5em 0;
         }
         .tiptap-wrapper .ProseMirror td,
         .tiptap-wrapper .ProseMirror th {
+          min-width: 3.5em;
           border: 1px solid ${darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'};
           padding: 0.4em 0.6em;
         }

@@ -41,6 +41,7 @@ from websocket import (
 
 from util import parse_common_args
 from Mongodb.db import DatabaseManager
+from utilss.constants import UPLOAD_FOLDER_NAME, LOCAL_FALLBACK_FOLDER_NAME
 
 # MongoDB setup
 SYNC_MONGODB_URI = os.getenv("MONGODB_URI")
@@ -162,11 +163,42 @@ async def global_workspace_cleanup_task():
                     deleted_local = False
                     deleted_container = False
                     
-                    # Remove local workspace directory
+                    # Keep local-only upload fallbacks when an inactive workspace
+                    # is cleaned. Normal cached files and workspace artifacts are
+                    # still removed as before.
                     if workspace_root_path.exists():
-                        shutil.rmtree(workspace_root_path, ignore_errors=True)
+                        upload_dir = workspace_root_path / UPLOAD_FOLDER_NAME
+                        fallback_dir = upload_dir / LOCAL_FALLBACK_FOLDER_NAME
+                        has_fallback_files = (
+                            fallback_dir.is_dir()
+                            and not fallback_dir.is_symlink()
+                            and any(path.is_file() for path in fallback_dir.iterdir())
+                        )
+
+                        if has_fallback_files:
+                            for workspace_entry in workspace_root_path.iterdir():
+                                if workspace_entry == upload_dir:
+                                    for upload_entry in upload_dir.iterdir():
+                                        if upload_entry == fallback_dir:
+                                            continue
+                                        if upload_entry.is_dir() and not upload_entry.is_symlink():
+                                            shutil.rmtree(upload_entry, ignore_errors=True)
+                                        else:
+                                            upload_entry.unlink(missing_ok=True)
+                                    continue
+                                if workspace_entry.is_dir() and not workspace_entry.is_symlink():
+                                    shutil.rmtree(workspace_entry, ignore_errors=True)
+                                else:
+                                    workspace_entry.unlink(missing_ok=True)
+                        else:
+                            shutil.rmtree(workspace_root_path, ignore_errors=True)
                         deleted_local = True
-                        logger.info(f"     ✅ Deleted local workspace: {workspace_root_path}")
+                        if has_fallback_files:
+                            logger.info(
+                                f"     ✅ Cleaned workspace and retained local fallback uploads: {fallback_dir}"
+                            )
+                        else:
+                            logger.info(f"     ✅ Deleted local workspace: {workspace_root_path}")
                     else:
                         logger.info(f"     ℹ️  Local workspace already removed: {workspace_root_path}")
                     

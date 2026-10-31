@@ -1,10 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Tldraw, exportToBlob, Editor } from 'tldraw';
+import { Tldraw, Editor } from 'tldraw';
 import 'tldraw/tldraw.css';
 import { WhiteboardBlock } from '@/typings/agent';
 import { Minimize2 } from 'lucide-react';
 import { WhiteboardHeader, WhiteboardFooter } from './whiteboardComponent/WhiteBoardHeader';
 import { WhiteboardAIAssistant } from './whiteboardComponent/AIAssistantTabs';
+import { getWhiteboardSnapshotInfo } from './whiteboardSnapshot';
 const { toRichText } = await import('tldraw');
 // Define shape interface for AI actions - use Record for flexible shape data
 interface AIShapeData {
@@ -29,11 +30,13 @@ const Whiteboard: React.FC<{
   deleteBlock?: (id: string | number) => void;
   onAIRequest?: (blockId: string | number, prompt: string) => void;
   mainAIHandler?: (prompt: string, context?: unknown) => Promise<void>;
+  showAIAssistant?: boolean;
 }> = ({
   block,
   darkMode,
   updateBlock,
-  mainAIHandler
+  mainAIHandler,
+  showAIAssistant = true,
 }) => {
     const [pendingAIAction, setPendingAIAction] = useState<{
       action: 'add' | 'modify' | 'replace';
@@ -48,6 +51,11 @@ const Whiteboard: React.FC<{
     const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [currentEditor, setCurrentEditor] = useState<Editor | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const whiteboardPropsRef = useRef({ block, updateBlock, title: whiteboardTitle });
+
+    useEffect(() => {
+      whiteboardPropsRef.current = { block, updateBlock, title: whiteboardTitle };
+    }, [block, updateBlock, whiteboardTitle]);
 
     useEffect(() => {
       if (block?.content?.aiShapes && block?.content?.aiAction) {
@@ -74,17 +82,18 @@ const Whiteboard: React.FC<{
         const snapshot = editor.getSnapshot();
         setWhiteboardData(snapshot);
 
-        if (updateBlock && block) {
+        const { block: activeBlock, updateBlock: updateActiveBlock, title } = whiteboardPropsRef.current;
+        if (updateActiveBlock && activeBlock) {
           // Save the snapshot directly as content
-          updateBlock(block.id, {
+          updateActiveBlock(activeBlock.id, {
             content: snapshot, // This should be the tldraw document structure
-            title: whiteboardTitle
+            title
           });
         }
       } catch (error) {
         console.error('Failed to save whiteboard data:', error);
       }
-    }, [updateBlock, block, whiteboardTitle]);
+    }, []);
 
     const handleTitleSave = () => {
       setIsEditingTitle(false);
@@ -100,15 +109,13 @@ const Whiteboard: React.FC<{
       if (!currentEditor) return;
 
       try {
-        const blob = await exportToBlob({
-          editor: currentEditor,
-          ids: [],
+        const shapeIds = Array.from(currentEditor.getCurrentPageShapeIds());
+        if (shapeIds.length === 0) return;
+
+        const { blob } = await currentEditor.toImage(shapeIds, {
           format: 'png',
-          opts: {
-            background: true,
-            bounds: currentEditor.getCurrentPageBounds(),
-            scale: 2
-          }
+          background: true,
+          scale: 2,
         });
 
         const url = URL.createObjectURL(blob);
@@ -402,58 +409,26 @@ const Whiteboard: React.FC<{
               onMount={(editor: Editor) => {
                 setCurrentEditor(editor);
 
-                // Debug what we received
-                console.log('🎨 Whiteboard component received block:', {
-                  id: block?.id,
-                  type: block?.type,
-                  title: block?.title,
-                  hasContent: !!block?.content,
-                  contentType: typeof block?.content,
-                  contentKeys: block?.content ? Object.keys(block?.content) : []
-                });
-
                 // Load whiteboard data if available
                 if (block?.content) {
                   try {
-                    let snapshot = null;
-
-                    // The content should now be the tldraw document directly
-                    if (block.content.store && block.content.store['document:document'] && block.content.store['page:page']) {
-                      console.log('✅ Found valid tldraw document structure');
-                      snapshot = block.content;
-
-                      // Count shapes for verification
-                      const shapeKeys = Object.keys(block.content.store).filter(key => key.startsWith('shape:'));
-                      console.log(`📊 Loading whiteboard with ${shapeKeys.length} shapes`);
-
-                      // Load the snapshot
+                    const { snapshot, store } = getWhiteboardSnapshotInfo(block.content);
+                    if (snapshot && store) {
+                      // Newer tldraw versions wrap the store in `document`; older snapshots
+                      // expose it at the top level. loadSnapshot supports both formats.
                       editor.loadSnapshot(snapshot);
-                      console.log('✅ Whiteboard snapshot loaded successfully!');
-
-                      // Verify shapes loaded correctly
-                      setTimeout(() => {
-                        const loadedShapes = editor.getCurrentPageShapes();
-                        console.log(`✅ Verification: Expected ${shapeKeys.length} shapes, loaded ${loadedShapes.length}`);
-
-                        if (loadedShapes.length !== shapeKeys.length) {
-                          console.warn('⚠️ Shape count mismatch after loading');
-                        }
-                      }, 200);
-
                     } else {
-                      console.warn('⚠️ Invalid whiteboard content structure:', {
-                        hasStore: !!block.content.store,
-                        hasDocument: !!(block.content.store && block.content.store['document:document']),
-                        hasPage: !!(block.content.store && block.content.store['page:page'])
+                      console.warn('Invalid whiteboard snapshot; starting with an empty board.', {
+                        contentType: typeof block.content,
+                        contentKeys: typeof block.content === 'object' ? Object.keys(block.content) : [],
                       });
                     }
 
                   } catch (error) {
-                    console.error('❌ Error loading whiteboard:', error);
-                    console.log('Block content that failed:', block?.content);
+                    console.error('Failed to load whiteboard snapshot:', error);
                   }
                 } else {
-                  console.log('ℹ️ No whiteboard content to load, starting empty');
+                  // New boards have no saved snapshot yet.
                 }
 
                 // Set up change handler
@@ -467,13 +442,15 @@ const Whiteboard: React.FC<{
                 };
               }}
             >
-              <WhiteboardAIAssistant
-                onAIRequest={handleAIRequestWithContext}
-                darkMode={darkMode}
-                isFullscreen={isFullscreen}
-                whiteboardType={block?.type || 'general'}
-                editor={currentEditor}
-              />
+              {showAIAssistant && (
+                <WhiteboardAIAssistant
+                  onAIRequest={handleAIRequestWithContext}
+                  darkMode={darkMode}
+                  isFullscreen={isFullscreen}
+                  whiteboardType={block?.type || 'general'}
+                  editor={currentEditor}
+                />
+              )}
             </Tldraw>
 
             {/* AI Preview Overlay - ADD THIS HERE */}

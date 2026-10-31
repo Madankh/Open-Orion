@@ -544,6 +544,38 @@ class DatabaseManager(NotepadCanvasOperations):
 
         return work_item
 
+    async def add_work_item_to_project(
+        self,
+        project_id: str,
+        user_id: str,
+        title: str,
+        type: str = "document",
+        session_id: Optional[str] = None
+    ) -> WorkItem:
+        """Add a work item directly under a project (no topic)"""
+        work_item = WorkItem(
+            title=title,
+            type=type,
+            created_by=user_id,
+            session_id=session_id or str(uuid.uuid4())
+        )
+
+        try:
+            project_object_id = ObjectId(project_id)
+        except InvalidId:
+            raise ValueError("Invalid project ID format")
+
+        result = await self.project_lists.update_one(
+            {"_id": project_object_id},
+            {"$push": {"work_items": work_item.dict()}}
+        )
+
+        if result.matched_count == 0:
+            raise ValueError("Project not found")
+
+        return work_item
+        
+
     async def create_workspace_session(
         self,
         session_id: str,
@@ -585,7 +617,23 @@ class DatabaseManager(NotepadCanvasOperations):
         """Get work item details by session ID"""
         try:
             session_str = str(session_id)
-
+            
+            doc = await self.project_lists.find_one(
+                {"work_items.session_id": session_str},
+                {"work_items.$": 1, "name": 1, "type": 1, "owner_id": 1}
+            )
+            if doc:
+                return {
+                    "work_item": doc["work_items"][0],
+                    "topic": None,
+                    "project": {
+                        "_id": doc["_id"],
+                        "name": doc["name"],
+                        "type": doc["type"],
+                        "owner_id": doc["owner_id"]
+                    }
+                }
+            
             pipeline = [
                 {"$unwind": "$topics"},
                 {"$unwind": "$topics.work_items"},

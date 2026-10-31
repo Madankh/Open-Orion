@@ -15,6 +15,14 @@ export interface PDFSourceData {
     width: number;
     height: number;
   };
+  boundingBoxNormalized?: boolean;
+  pageRange?: { startPage: number; endPage: number };
+  embeddedImages?: Array<{
+    s3Key: string;
+    pageNumber: number;
+    alt: string;
+    boundingBox: { x: number; y: number; width: number; height: number };
+  }>;
   type: 'text' | 'image' | 'mixed';
 }
 
@@ -633,7 +641,8 @@ export type NodeType =
   | 'pdf' 
   | 'image' 
   | 'youtube' 
-  | 'link';
+  | 'link'
+  | 'whiteboard';
 
 export interface NodeData {
   // Core Identity
@@ -656,7 +665,9 @@ export interface NodeData {
   childIds: string[];       // Direct children
   level: number;            // Depth in hierarchy
   isExpanded: boolean;      // For collapsing groups/nodes
-  
+  kind?: 'note' | 'card';
+  cardId?: string;
+  boardCount?: number; 
   // File/Media Properties (Optional)
   fileType?: string;
   s3Key?: string;           // Unified (removed duplicate s3_key)
@@ -676,8 +687,27 @@ export interface NodeData {
   project_note_id?:string;
   zIndex?: number;
   fallbackX?: number;
+  tags?: string[];
   fallbackY?: number;
   pdfSource?: PDFSourceData;
+}
+
+
+export interface Card {
+  id: string;
+  type: NodeData['type'];
+  title: string;
+  content: string;
+  mediaUrl?: string; s3Key?: string; fileName?: string; fileType?: string;
+  pdfSource?: NodeData['pdfSource'];
+  boardCount?: number;      // from backend: how many boards show this card
+  updatedAt?: number;
+  tags: string[];
+}
+
+interface CardLink {
+  id: string; fromCardId: string; toCardId: string;
+  source: 'mention' | 'connection' | 'manual'; label?: string;
 }
 
 // Helper type for creating new nodes with defaults
@@ -723,6 +753,13 @@ export interface InfiniteCanvasProps {
   projectContext?: ProjectContext;
   userinfo?:UserInfo;
   selectedModel: string;
+  focusRequest?: { nodeId: string; ts: number } | null;
+  onNavigateBoard?: (canvasId: string, nodeId: string) => void
+  onExploreInDepth?: (context: { title: string; content: string }) => void;
+  onAgentModeChange?: (mode: string, type: string) => void;
+  currentAgentMode?: string;
+  currentAgentType?: string;
+  onApplyNote?: (noteContent: string, messageId?: string) => void;
   onModelChange: (modelId: string) => void;
 }
 export type ColorTheme = 'slate' | 'red' | 'green' | 'blue' | 'yellow' | 'orange' | 'purple' | 'white';

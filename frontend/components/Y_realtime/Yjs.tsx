@@ -49,7 +49,7 @@ interface RootState {
 
 export interface YCanvasNode {
   id: string;
-  type: 'text' | 'agent' | 'conversation' | 'file' | 'media' | 'pdf' | 'image' | 'youtube' | 'group' | 'link';
+  type: 'text' | 'agent' | 'conversation' | 'file' | 'media' | 'pdf' | 'image' | 'youtube' | 'group' | 'link' | 'whiteboard';
   
   // ✅ FIX: Use flat x, y structure (matches NodeData)
   x: number;

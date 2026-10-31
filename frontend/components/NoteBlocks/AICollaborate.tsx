@@ -90,6 +90,10 @@ interface AICollaborateProps {
   onModelChange?: (modelId: string) => void;  
   currentModel?: string;                      
   userinfo?:UserInfo;
+  initialCanvasContext?: { title: string; content: string } | null;
+  readerContext?: { title: string; content: string } | null;
+  onAssistantResponse?: (content: string) => void;
+  compact?: boolean;
 }
 
 
@@ -105,7 +109,11 @@ const AICollaborate: React.FC<AICollaborateProps> = ({
   currentAgentType,
   onModelChange,  
   currentModel,    
-  userinfo
+  userinfo,
+  initialCanvasContext,
+  readerContext,
+  onAssistantResponse,
+  compact = false
 }) => {
   
   interface RootState {
@@ -134,6 +142,18 @@ const AICollaborate: React.FC<AICollaborateProps> = ({
   const [ThinkingContent, setThinkingContent] = useState<Message[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState("");
   const [isCompleted, setIsCompleted] = useState(false);
+
+  useEffect(() => {
+    if (!initialCanvasContext) return;
+    const plainContent = initialCanvasContext.content
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    setCurrentQuestion(
+      `${initialCanvasContext.title}\n\n${plainContent}`
+    );
+  }, [initialCanvasContext]);
 
   const [activeTab, setActiveTab] = useState(TAB.NULL);
   const [currentActionData, setCurrentActionData] = useState<ActionStep>();
@@ -414,9 +434,12 @@ if (typeof window !== 'undefined') {
         });
         break;
   
-      case AgentEvent.STREAMING_COMPLETE:
+      case AgentEvent.STREAMING_COMPLETE: {
+        const streamContent = stream.length > 0 ? stream[stream.length - 1] : null;
+        if (streamContent?.role === 'assistant' && typeof streamContent.content === 'string') {
+          onAssistantResponse?.(streamContent.content);
+        }
         setMessages((prev) => {
-          const streamContent = stream.length > 0 ? stream[stream.length - 1] : null;
           if (streamContent && streamContent.role === "assistant") {
             return [...prev, streamContent];
           }
@@ -426,9 +449,11 @@ if (typeof window !== 'undefined') {
         setIsLoading(false);
         setIsCompleted(true);
         break;
+      }
   
       case AgentEvent.AGENT_RESPONSE:
         setstreamMessage([]);
+        if (typeof data.content.text === 'string') onAssistantResponse?.(data.content.text);
         setMessages((prev) => [...prev, { 
           id: data.id || Date.now().toString(), 
           role: "assistant", 
@@ -614,7 +639,7 @@ if (typeof window !== 'undefined') {
         console.log("⚠️ Unhandled event type:", data.type);
         break;
     }
-  }, [workspaceInfo, handleClickAction, streamingToolCallId, streamingContent, stream]);
+  }, [workspaceInfo, handleClickAction, streamingToolCallId, streamingContent, stream, onAssistantResponse]);
 
   const handleThoughtEvent = useCallback((data: {
     id?: string;
@@ -673,6 +698,7 @@ if (typeof window !== 'undefined') {
             setIsReceivingReport(false);
             setIsLoading(false);
             setIsCompleted(true);
+            if (typeof eventData.result === 'string') onAssistantResponse?.(eventData.result);
             setMessages((prev) => [ ...prev, { id: data.id || Date.now().toString(), role: "assistant", content: eventData.result || "", timestamp: Date.now(), },]);
             setDeepResearchReport("");
             setDeepResearchSteps([]);
@@ -688,7 +714,7 @@ if (typeof window !== 'undefined') {
             setDeepResearchSteps(prev => [...prev, genericStep]);
             break;
       }
-  }, [handleClickAction, isReceivingReport]);
+  }, [handleClickAction, isReceivingReport, onAssistantResponse]);
 
 
   const processedEventsRef = useRef<Set<string>>(new Set());
@@ -763,6 +789,9 @@ if (typeof window !== 'undefined') {
     if (youtubeUrls.length > 0) {
       const linksText = youtubeUrls.map(url => `\n[Reference Video: ${url}]`).join("");
       finalQuestion += linksText;
+    }
+    if (readerContext?.content) {
+      finalQuestion += `\n\n[Current reading focus: ${readerContext.title}]\n${readerContext.content}`;
     }
   
     const newUserMessage: Message = {
@@ -1079,13 +1108,20 @@ const loadSessionHistory = useCallback(async (isInitialLoad = false) => {
   };
 
   return (
-    <div>
+    <div className={compact ? "h-full min-h-0" : ""}>
       {UserPlanID == "custom_api" ? <APIcontainer/> : ""}
       
-      <div className="relative z-0">
+      <div className={`relative z-0 ${compact ? "h-full" : ""}`}>
 
         
-        <div className="flex flex-col items-center justify-center min-h-screen bg-[#000000]">
+        <div
+          className={`flex flex-col items-center justify-center ${compact ? "h-full min-h-0" : "min-h-screen"} bg-canvas bg-dot-pattern`}
+          style={{
+            backgroundColor: '#ffffff',
+            backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)',
+            backgroundSize: '20px 20px',
+          }}
+        >
             <LayoutGroup>
               <AnimatePresence mode="wait">
                   <motion.div

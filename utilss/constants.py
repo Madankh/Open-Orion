@@ -1,6 +1,7 @@
 from enum import Enum
 
 UPLOAD_FOLDER_NAME = "uploaded_files"
+LOCAL_FALLBACK_FOLDER_NAME = "__local_fallback__"
 COMPLETE_MESSAGE = "Completed the task."
 DEFAULT_MODEL="z-ai/glm-4.5-air:free"
 # DEFAULT_MODEL="qwen/qwen3-vl-30b-a3b-instruct"

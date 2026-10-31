@@ -1,22 +1,29 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo, useLayoutEffect } from 'react';
-import { NodeData, InfiniteCanvasProps, DragState, Position, ColorTheme, Connection, ConnectionStyle, ConnectionArrow, GlobalNote, RootState } from '@/typings/agent';
+import { NodeData, InfiniteCanvasProps, DragState, Position, ColorTheme, Connection, ConnectionStyle, ConnectionArrow, GlobalNote, RootState,Card } from '@/typings/agent';
 import { COLORS, INITIAL_GLOBAL_NOTES } from '../NoteBlocks/CreativeCanvasHelper/components/constants';
 import { NodeCard } from './components/NodeCard';
+import type { NodeOperationStatus } from './components/NodeOperationOverlay';
 import dynamic from 'next/dynamic';
 import { GroupContainer } from './components/GroupContainer';
 import { ConnectionLayer } from './components/ConnectionLayer';
 import Minimap from "../NoteBlocks/CreativeCanvasHelper/components/minimap"
 import { useCollab } from "../Y_realtime/Yjs";
 import { NotesSidebar } from './components/NotesSidebar';
-import { Plus, Minus, Move, StickyNote, LayoutGrid, X, Trash2, ArrowRight, Minus as MinusIcon, MoveHorizontal, LocateFixed, Undo2, Redo2, BookOpen, Sparkles, Loader2, FileText, Layers, CornerDownRight, ArrowUp } from 'lucide-react';
-import { EditorSidebar } from '../NoteBlocks/CreativeCanvasHelper/components/editing';
+import { Plus, Minus, Move, StickyNote, LayoutGrid, X, Trash2, ArrowRight, Minus as MinusIcon, MoveHorizontal, LocateFixed, Undo2, Redo2, BookOpen, Sparkles, Loader2, FileText, Layers, CornerDownRight, ArrowUp, MessageSquareText, Paintbrush, AtomIcon } from 'lucide-react';
+import { EditorSidebar, NoteLinkTarget, WhiteboardEditorSidebar } from '../NoteBlocks/CreativeCanvasHelper/components/editing';
 import SessionNoteEditor from '../NoteBlocks/CreativeCanvasHelper/components/editRef';
-import { useVirtualization, useConnectionVirtualization, useCanvasTransform, useNodeMap, useScreenToCanvas, useCanvasToScreen, snapToGrid, VirtualizedCanvas } from '../NoteBlocks/CreativeCanvasHelper/components/vertulization';
+import { useConnectionVirtualization, useCanvasTransform, useNodeMap, snapToGrid } from '../NoteBlocks/CreativeCanvasHelper/components/vertulization';
 import { useWebSocketHandlers } from './CreativeCanvasHelper/hooks/useWebSocketHandlers';
-import { CanvasAiInput, LLMModel } from '../NoteBlocks/CreativeCanvasHelper/components/CanvasAiInput';
+import AICollaborate from './AICollaborate';
 import { useSelector } from 'react-redux';
 import { toast } from 'sonner';
+import { marked } from 'marked';
 import { pythonUrl,nodeUrl } from "../../apiurl"
+import { useCards, normalizeCard } from './CreativeCanvasHelper/hooks/useCards';
+import { CardMetaPanel } from './CreativeCanvasHelper/components/CardMetaPanel';
+import { CardSearchPalette } from './CreativeCanvasHelper/components//CardSearchPalette';
+import { TagFilterBar } from './CreativeCanvasHelper/components/TagFilterBar';
+
 import {
     collectSmartNodeContext,
     getConnectedNodesWithMedia,
@@ -25,8 +32,9 @@ import {
 } from '../NoteBlocks/CreativeCanvasHelper/components/ContextHelpers';
 import APIcontainer from "../APIcontainer"
 import {
-    SNAP_GRID, GROUP_PADDING, findParentPDF, getConnectedNodes,
-    readFileAsBase64, extractYoutubeId, apiService, collectNodeContext, getNodeCenter, GROUP_HEADER_HEIGHT, getGroupBounds, API_BASE_URL, isGroupNode
+    SNAP_GRID, GROUP_PADDING, findParentPDF,
+    readFileAsBase64, extractYoutubeId, apiService, getNodeCenter, GROUP_HEADER_HEIGHT,
+    getGroupBounds, API_BASE_URL, isGroupNode, restoreInlineImageSources
 } from '../NoteBlocks/CreativeCanvasHelper/components/CanvasHelpers';
 
 const AdvancedKnowledgeExtractor = dynamic(
@@ -37,18 +45,35 @@ const AdvancedKnowledgeExtractor = dynamic(
     }
 );
 
+interface CanvasModelOption {
+    id: string;
+    name: string;
+    provider: string;
+    description?: string;
+}
+
+
 const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     sessionId,
     socket,
     workspaceInfoFromHome,
     projectInfo,
+    projectContext,
     isConnected,
     userinfo,
+    onNavigateBoard,
+    onExploreInDepth,
+    onAgentModeChange,
+    currentAgentMode,
+    currentAgentType,
+    onApplyNote,
     selectedModel,
+    focusRequest,
+    
     onModelChange
 }) => {
 
-    const CUSTOM_API_MODELS: LLMModel[] = [
+    const CUSTOM_API_MODELS: CanvasModelOption[] = [
         {id: "z-ai/glm-4.7", name: "Z-ai", provider: "z-ai/glm-4.7", description: "z-ai/glm-4.7" },
         {id:"google/gemini-3-pro-preview",name: "Google", provider: "google/gemini-3-pro-preview", description: "google/gemini-3-pro-preview" },
         {id: "qwen/qwen3-vl-30b-a3b-instruct", name: "Qwen", provider: "qwen/qwen3-vl-30b-a3b-instruct", description: "Token efficient model" },
@@ -61,7 +86,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         {id: "google/gemini-2.5-flash-lite", name: "google", provider: "google/gemini-2.5-flash-lite", description: "Token efficient model" },
     ];
 
-    const BASIC_MODELS: LLMModel[] = [
+    const BASIC_MODELS: CanvasModelOption[] = [
         {id: "z-ai/glm-4.5-air:free", name: "Z-ai", provider: "z-ai/glm-4.5-air:free", description: "z-ai/glm-4.5-air:free" },
         { id: "z-ai/glm-4.7", name: "Z-ai", provider: "z-ai/glm-4.7", description: "z-ai/glm-4.7" },
         { id: "z-ai/glm-4.6", name: "z-ai/glm-4.6", provider: "Z-ai", description: "Best at tool use but cost more token" },
@@ -78,7 +103,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const pdfarray = [{ name: "Reader mode" }];
     const unsavedPositionsRef = useRef<Map<string, { x: number, y: number, width?: number, height?: number }>>(new Map());
     const [isSaving, setIsSaving] = useState(false);
-    const [pdfJumpLocation, setPdfJumpLocation] = useState<{ pageNumber: number, boundingBox: any } | null>(null);
+    const [pdfJumpLocation, setPdfJumpLocation] = useState<{ pageNumber: number, boundingBox: any, boundingBoxNormalized?: boolean } | null>(null);
     const [loadingRefIds, setLoadingRefIds] = useState<Set<string>>(new Set());
     const [localNodes, setLocalNodes] = useState<NodeData[]>([]);
     const [localConnections, setLocalConnections] = useState<Connection[]>([]);
@@ -91,6 +116,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const isCollaborativeMode = useMemo(() => {
         return projectInfo?.type === 'group';
     }, [projectInfo?.type]);
+
+
 
 
     const [projectNotes, setProjectNotes] = useState<any[]>([]);
@@ -185,15 +212,40 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+    const [nodeOperations, setNodeOperations] = useState<Record<string, NodeOperationStatus>>({});
+    const activeNodeOperationsRef = useRef(new Set<string>());
+    const beginNodeOperation = useCallback((nodeId: string, status: NodeOperationStatus) => {
+        if (activeNodeOperationsRef.current.has(nodeId)) return false;
+        activeNodeOperationsRef.current.add(nodeId);
+        setNodeOperations(current => ({ ...current, [nodeId]: status }));
+        return true;
+    }, []);
+    const finishNodeOperation = useCallback((nodeId: string) => {
+        activeNodeOperationsRef.current.delete(nodeId);
+        setNodeOperations(current => {
+            if (!current[nodeId]) return current;
+            const next = { ...current };
+            delete next[nodeId];
+            return next;
+        });
+    }, []);
     const [activePDFNode, setActivePDFNode] = useState<string | null>(null);
     const [pdfReaderVisible, setPDFReaderVisible] = useState(false);
+    const [isPDFReaderExpanded, setIsPDFReaderExpanded] = useState(false);
     const [scale, setScale] = useState(0.80);
     const [viewport, setViewport] = useState({ x: 0, y: 0 });
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [isCompleted, setIsCompleted] = useState(false);
+    const [isWorkspaceChatOpen, setIsWorkspaceChatOpen] = useState(false);
+    const [workspaceChatWidth, setWorkspaceChatWidth] = useState(0);
+    const [workspaceEditorWidth, setWorkspaceEditorWidth] = useState(700);
+    const dockResizeCleanupRef = useRef<(() => void) | null>(null);
+    const [workspaceChatContext, setWorkspaceChatContext] = useState<{ title: string; content: string } | null>(null);
+    const [workspaceReaderContext, setWorkspaceReaderContext] = useState<{ title: string; content: string } | null>(null);
 
     const nodeSaveTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
     const connectionSaveTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
+    const pdfSelectionPlacementRef = useRef<{ nodeId: string | null; nextIndex: number }>({ nodeId: null, nextIndex: 0 });
 
     // Inside InfiniteCanvas component, near your other useRefs:
     const viewportRef = useRef(viewport);
@@ -207,6 +259,20 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         connectionsRef.current = connections;
     }, [viewport, scale, nodes, connections]);
 
+    const containerRef = useRef<HTMLDivElement>(null);
+    const animRef = useRef<number>();
+    const {
+      cards, upsertCards, removeCard, patchCard, updateTags, loadCards,
+      suggestTags, search, searchTags, getLinks, getBoards, addLink, removeLink, linksVersion,
+    } = useCards({ accessToken, apiBase: API_BASE_URL, nodes });
+
+    const [tagFilter, setTagFilter] = useState<string[]>([]);
+    const [paletteMode, setPaletteMode] = useState<null | 'add' | 'link'>(null);
+
+    // const [cards, setCards] = useState<Record<string, Card>>({});
+
+    const [highlightId, setHighlightId] = useState<string | null>(null);
+    
     // Connection Mode State
     const [connectingNodeId, setConnectingNodeId] = useState<string | null>(null);
     const [mousePos, setMousePos] = useState<Position>({ x: 0, y: 0 });
@@ -234,6 +300,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
     const { streamingState } = useWebSocketHandlers({
         socket,
+        enabled: !isWorkspaceChatOpen,
         nodesRef,
         connectionsRef,
         canvas: {
@@ -283,6 +350,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         existing.parentId !== node.parentId ||
                         existing.color !== node.color ||
                         existing.type !== node.type ||
+                        existing.kind !== node.kind ||
+                        existing.cardId !== node.cardId ||
                         existing.youtubeId !== node.youtubeId ||
                         existing.pdfUrl !== node.pdfUrl ||
                         existing.mediaUrl !== node.mediaUrl ||
@@ -305,7 +374,11 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             childIds: node.childIds,
                             parentId: node.parentId,
                             type: node.type,
+                            kind: node.kind,
+                            cardId: node.cardId,
                             // ✅ ADD: Media fields
+                            ...(node.kind !== undefined && { kind: node.kind }),
+                            ...(node.cardId !== undefined && { cardId: node.cardId }),
                             ...(node.youtubeId !== undefined && { youtubeId: node.youtubeId }),
                             ...(node.pdfUrl !== undefined && { pdfUrl: node.pdfUrl }),
                             ...(node.mediaUrl !== undefined && { mediaUrl: node.mediaUrl }),
@@ -320,7 +393,6 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         });
                     }
                 } else {
-                    // ✅ FIX: New node - include ALL fields
                     collab.addYCanvasNode({
                         id: node.id,
                         type: node.type,
@@ -335,7 +407,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         level: node.level,
                         color: node.color,
                         isExpanded: node.isExpanded,
-                        // ✅ ADD: Media fields
+                        ...(node.kind && { kind: node.kind }),
+                        ...(node.cardId && { cardId: node.cardId }),
                         ...(node.youtubeId && { youtubeId: node.youtubeId }),
                         ...(node.pdfUrl && { pdfUrl: node.pdfUrl }),
                         ...(node.mediaUrl && { mediaUrl: node.mediaUrl }),
@@ -627,18 +700,16 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     }, [undo, redo]);
 
     // --- Deletion ---
-    const handleDelete = useCallback(() => {
+    const handleDelete = useCallback(async () => {
         if (!selectedId) return;
 
-        addToHistory();
-
-        // ✅ FIX: Get fresh nodes from correct source
         const freshNodes = isCollaborativeMode
             ? Array.from(collab.canvasNodes.values())
             : nodes;
 
         // Check for Connection using ID
         if (connections.some(c => c.id === selectedId)) {
+            addToHistory();
             updateConnections(prev => prev.filter(c => c.id !== selectedId));
 
             // Call API to delete
@@ -648,7 +719,6 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 }).catch(err => console.error("Failed to delete connection", err));
             }
-
             setSelectedId(null);
             return;
         }
@@ -656,30 +726,43 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         // Node deletion logic
         const node = freshNodes.find(n => n.id === selectedId);
         if (node) {
-            if (isGroupNode(node)) {
-                // Unparent all children before deleting group
-                updateNodes(prev => prev.map(n =>
-                    n.parentId === selectedId ? { ...n, parentId: undefined } : n
-                ).filter(n => n.id !== selectedId));
-            } else {
-                // Delete the node
-                updateNodes(prev => prev.filter(n => n.id !== selectedId));
+            if (!accessToken) {
+                toast.error('Sign in again before deleting this node');
+                return;
             }
-
-            // Delete all connections involving this node
-            updateConnections(prev => prev.filter(c => c.fromId !== selectedId && c.toId !== selectedId));
-
-            // Call API to delete node
-            if (accessToken) {
-                fetch(`${API_BASE_URL}/nodes/${sessionId}/${selectedId}?branch_id=main`, {
+            if (!beginNodeOperation(selectedId, 'deleting')) {
+                toast.info('This node is already being updated');
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE_URL}/nodes/${sessionId}/${selectedId}?branch_id=main`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${accessToken}` }
-                }).catch(err => console.error("Failed to delete node", err));
-            }
+                });
+                if (!response.ok) {
+                    const result = await response.json().catch(() => ({}));
+                    throw new Error(result.detail || `Delete failed (${response.status})`);
+                }
 
-            setSelectedId(null);
+                addToHistory();
+                if (isGroupNode(node)) {
+                    // Unparent all children before deleting group
+                    updateNodes(prev => prev.map(n =>
+                        n.parentId === selectedId ? { ...n, parentId: undefined } : n
+                    ).filter(n => n.id !== selectedId));
+                } else {
+                    updateNodes(prev => prev.filter(n => n.id !== selectedId));
+                }
+
+                updateConnections(prev => prev.filter(c => c.fromId !== selectedId && c.toId !== selectedId));
+                setSelectedId(null);
+            } catch (error) {
+                toast.error(error instanceof Error ? error.message : 'Could not delete node and its attached files');
+            } finally {
+                finishNodeOperation(selectedId);
+            }
         }
-    }, [selectedId, nodes, connections, addToHistory, updateNodes, updateConnections, accessToken, sessionId, API_BASE_URL, isCollaborativeMode, collab]);
+    }, [selectedId, nodes, connections, addToHistory, updateNodes, updateConnections, accessToken, sessionId, API_BASE_URL, isCollaborativeMode, collab, beginNodeOperation, finishNodeOperation]);
 
 
 
@@ -750,6 +833,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
         return Array.from(filesMap.values());
     };
+
 
     const handleAskAi = async (e?: React.FormEvent) => {
         if (e) e.preventDefault();
@@ -914,10 +998,41 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
 
     const handlePDFSelectionAdd = useCallback(async (selection: any) => {
-        if (!activePDFNode) return;
+        if (!activePDFNode) return false;
 
         const parentNode = nodes.find(n => n.id === activePDFNode);
-        if (!parentNode) return;
+        if (!parentNode) return false;
+        if (!accessToken) {
+            toast.error('Sign in again before saving this PDF selection');
+            return false;
+        }
+
+        const existingRangeNode = selection.pageRange
+            ? nodes.find(node => {
+                const belongsToPdf = node.parentId === activePDFNode ||
+                    Boolean(parentNode.pdfUrl && node.pdfSource?.fileUrl === parentNode.pdfUrl);
+                const samePageRange =
+                    (node.pdfSource?.pageRange?.startPage === selection.pageRange.startPage &&
+                     node.pdfSource?.pageRange?.endPage === selection.pageRange.endPage) ||
+                    node.title === `PDF pages ${selection.pageRange.startPage}–${selection.pageRange.endPage}`;
+                return belongsToPdf && samePageRange;
+            })
+            : undefined;
+        if (pdfSelectionPlacementRef.current.nodeId !== activePDFNode) {
+            pdfSelectionPlacementRef.current = { nodeId: activePDFNode, nextIndex: 0 };
+        }
+        const savedChildren = nodesRef.current.filter(n => n.parentId === activePDFNode).length;
+        const placementIndex = existingRangeNode
+            ? Math.max(0, nodes.findIndex(node => node.id === existingRangeNode.id))
+            : Math.max(savedChildren, pdfSelectionPlacementRef.current.nextIndex);
+        if (!existingRangeNode) pdfSelectionPlacementRef.current.nextIndex = placementIndex + 1;
+
+        const embeddedImages = Array.isArray(selection.embeddedImages) ? selection.embeddedImages : [];
+        const hasImageUpload = Boolean(selection.imageData || embeddedImages.length);
+        if (hasImageUpload && !beginNodeOperation(activePDFNode, 'uploading')) {
+            toast.info('This node is already being updated');
+            return false;
+        }
 
         addToHistory();
 
@@ -925,66 +1040,91 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         let nodeType: 'text' | 'image' = 'text';
         let imageUrl: string | undefined = undefined;
         let s3Key: string | undefined = undefined;
+        const embeddedImageMetadata: Array<{
+            s3Key: string;
+            pageNumber: number;
+            alt: string;
+            boundingBox: { x: number; y: number; width: number; height: number };
+        }> = [...(existingRangeNode?.pdfSource?.embeddedImages || [])];
 
         // 1. Prepare Content & Upload Images if necessary
         switch (selection.type) {
             case 'text':
-                content = `${selection.content}\n\n_From PDF page ${selection.pageNumber}_`;
+                content = selection.content || '';
+                if (embeddedImages.length) {
+                    const escapeHtmlAttribute = (value: unknown) => String(value ?? '')
+                        .replace(/&/g, '&amp;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                    try {
+                        for (const embeddedImage of embeddedImages) {
+                            const safeAssetName = String(embeddedImage.id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+                            const uploaded = await apiService.uploadFile(sessionId, {
+                                path: `pdf_page_${embeddedImage.pageNumber}_${safeAssetName}.png`,
+                                content: embeddedImage.imageData,
+                            }, accessToken);
+                            const uploadedKey = uploaded.file.s3_key;
+                            const uploadedUrl = `${pythonUrl}${uploaded.file.path}`;
+                            const imageTag = `<img src="${escapeHtmlAttribute(uploadedUrl)}" data-s3-key="${escapeHtmlAttribute(uploadedKey)}" alt="${escapeHtmlAttribute(embeddedImage.alt)}" data-pdf-page="${embeddedImage.pageNumber}" style="max-width:100%;height:auto;" />`;
+                            content = content.replace(`[[PDF_IMAGE:${embeddedImage.id}]]`, imageTag);
+                            embeddedImageMetadata.push({
+                                s3Key: uploadedKey,
+                                pageNumber: embeddedImage.pageNumber,
+                                alt: embeddedImage.alt,
+                                boundingBox: embeddedImage.boundingBox,
+                            });
+                        }
+                    } catch (err) {
+                        console.error('Failed to save embedded PDF images', err);
+                        toast.error('Failed to save one of the PDF images');
+                        finishNodeOperation(activePDFNode);
+                        return false;
+                    }
+                }
+                content;
                 break;
             case 'image':
             case 'chart':
             case 'table':
+            case 'diagram':
                 if (selection.imageData) {
                     try {
-                        // Upload the cropped selection image
-                        const uploadResponse = await fetch(`${API_BASE_URL}/upload`, {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                                session_id: sessionId,
-                                file: {
-                                    path: `selection_${Date.now()}.png`,
-                                    content: selection.imageData
-                                }
-                            })
-                        });
-
-                        if (uploadResponse.ok) {
-                            const data = await uploadResponse.json();
-                            // Construct the full URL
-                            const baseUrl = new URL(API_BASE_URL).origin;
-                            imageUrl = `${baseUrl}${data.file.path}`;
-                            s3Key = data.file.s3_key;
-
-                            nodeType = 'image';
-                            content = `${selection.type.toUpperCase()} from page ${selection.pageNumber}`;
-                        }
+                        const data = await apiService.uploadFile(sessionId, {
+                            path: `selection_${Date.now()}.png`,
+                            content: selection.imageData,
+                        }, accessToken);
+                        imageUrl = `${pythonUrl}${data.file.path}`;
+                        s3Key = data.file.s3_key;
+                        nodeType = 'image';
+                        content = `${selection.content || `${selection.type.toUpperCase()} from page ${selection.pageNumber}`}\n\n_From PDF page ${selection.pageNumber}_`;
                     } catch (err) {
                         console.error("Failed to upload selection image", err);
                         toast.error("Failed to save image selection");
-                        return; // Stop if upload fails
+                        finishNodeOperation(activePDFNode);
+                        return false; // Stop if upload fails
                     }
                 }
                 break;
         }
 
-        const newId = `n-${Date.now()}`;
+        const newId = existingRangeNode?.id || `n-${Date.now()}`;
 
         // 2. Create the Node Object
         const newNode: NodeData = {
+            ...(existingRangeNode || {}),
             id: newId,
             type: nodeType,
-            title: `Page ${selection.pageNumber} - ${selection.type}`,
+            title: selection.pageRange
+                ? `PDF pages ${selection.pageRange.startPage}–${selection.pageRange.endPage}`
+                : `Page ${selection.pageNumber} - ${selection.type}`,
             content: content,
-            x: parentNode.x + 450,
-            y: parentNode.y + (nodes.filter(n => n.parentId === activePDFNode).length * 220),
-            width: 420,
-            height: nodeType === 'image' ? 400 : 200,
+            x: existingRangeNode?.x ?? parentNode.x + 450,
+            y: existingRangeNode?.y ?? parentNode.y + (placementIndex * 220),
+            width: existingRangeNode?.width ?? 420,
+            height: selection.pageRange ? 560 : nodeType === 'image' ? 400 : 200,
             color: parentNode.color,
-            parentId: parentNode.parentId, // Or activePDFNode if you want strict hierarchy
+            parentId: activePDFNode,
             childIds: [],
             level: parentNode.level,
             isExpanded: true,
@@ -993,6 +1133,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                 fileUrl: parentNode.pdfUrl,
                 pageNumber: selection.pageNumber,
                 boundingBox: selection.boundingBox,
+                boundingBoxNormalized: Boolean(selection.boundingBoxNormalized),
+                ...(selection.pageRange && { pageRange: selection.pageRange }),
+                ...(embeddedImageMetadata.length && { embeddedImages: embeddedImageMetadata }),
                 type: selection.type
             }
         };
@@ -1008,21 +1151,39 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
             color: 'slate',
             label: 'PDF'
         };
+        const needsPdfConnection = !connections.some(connection =>
+            connection.fromId === activePDFNode && connection.toId === newId
+        );
 
-        // 4. Update Local/Collab State
-        updateNodes(prev => [...prev, newNode]);
-        updateConnections(prev => [...prev, newConnection]);
-
-        // 5. 🔥 CRITICAL FIX: Save to Database 🔥
-        if (accessToken) {
-            try {
-                // A. Save Node
-                await fetch(`${API_BASE_URL}/nodes`, {
+        try {
+            const headers = {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            };
+            const pdfSource = {
+                pageNumber: selection.pageNumber,
+                boundingBox: selection.boundingBox,
+                boundingBoxNormalized: Boolean(selection.boundingBoxNormalized),
+                ...(selection.pageRange && { pageRange: selection.pageRange }),
+                ...(embeddedImageMetadata.length && { embeddedImages: embeddedImageMetadata }),
+                type: selection.type,
+                fileUrl: parentNode.pdfUrl
+            };
+            const nodeResponse = existingRangeNode
+                ? await fetch(`${API_BASE_URL}/nodes/${sessionId}/${newId}?branch_id=main`, {
+                    method: 'PATCH',
+                    headers,
+                    body: JSON.stringify({
+                        parent_node_id: activePDFNode,
+                        title: newNode.title,
+                        content: newNode.content,
+                        height: newNode.height,
+                        metadata: { pdfSource }
+                    })
+                })
+                : await fetch(`${API_BASE_URL}/nodes`, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers,
                     body: JSON.stringify({
                         canvas_id: sessionId,
                         node_id: newId,
@@ -1039,22 +1200,26 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         color: newNode.color,
                         is_expanded: true,
 
-                        // Save specific fields
-                        media_url: imageUrl || "",
+                        // The object key is durable; the workspace URL is only a cache location.
                         s3_key: s3Key || "",
-                        metadata: {
-                            pdfSource: {
-                                pageNumber: selection.pageNumber,
-                                boundingBox: selection.boundingBox,
-                                type: selection.type,
-                                fileUrl: parentNode.pdfUrl
-                            }
-                        }
+                        metadata: { pdfSource }
                     })
                 });
+            if (!nodeResponse.ok) {
+                const result = await nodeResponse.json().catch(() => ({}));
+                throw new Error(result.detail || `Could not save selection (${nodeResponse.status})`);
+            }
 
-                // B. Save Connection
-                await fetch(`${API_BASE_URL}/connections`, {
+            if (existingRangeNode) {
+                updateNodes(prev => prev.map(node => node.id === newId ? newNode : node));
+            } else {
+                updateNodes(prev => [...prev, newNode]);
+            }
+            toast.success(existingRangeNode ? 'Updated the PDF pages note' : 'Added PDF pages to the canvas');
+
+            if (needsPdfConnection) {
+                updateConnections(prev => [...prev, newConnection]);
+                const connectionResponse = await fetch(`${API_BASE_URL}/connections`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
@@ -1072,18 +1237,33 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         label: 'Resource'
                     })
                 });
-
-            } catch (error) {
-                console.error("❌ Failed to save PDF selection node:", error);
-                toast.error("Failed to save to database");
+                if (!connectionResponse.ok) {
+                    console.error('Could not save PDF selection connection:', connectionResponse.status);
+                    toast.error('Selection saved, but its PDF connection could not be saved');
+                }
             }
+        } catch (error) {
+            console.error("❌ Failed to save PDF selection node:", error);
+            toast.error(error instanceof Error ? error.message : 'Failed to save to database');
+            return false;
+        } finally {
+            if (hasImageUpload) finishNodeOperation(activePDFNode);
         }
 
-    }, [activePDFNode, nodes, addToHistory, updateNodes, updateConnections, accessToken, sessionId, API_BASE_URL]);
+        return true;
+
+    }, [activePDFNode, nodes, connections, addToHistory, updateNodes, updateConnections, accessToken, sessionId, API_BASE_URL, beginNodeOperation, finishNodeOperation]);
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
+        if (editingNodeId) return;
+
         const target = e.target as HTMLElement;
-        if (target.closest('.ProseMirror') || target.closest('.overflow-y-auto')) {
+        if (
+            target.closest('[data-editor-sidebar]') ||
+            target.closest('.ProseMirror') ||
+            target.closest('.overflow-y-auto') ||
+            target.closest('.overflow-auto')
+        ) {
             return;
         }
 
@@ -1098,7 +1278,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                 y: prev.y - e.deltaY
             }));
         }
-    }, [scale]);
+    }, [scale, editingNodeId]);
 
 
     const handleOpenSource = useCallback((sourceNode: NodeData) => {
@@ -1111,10 +1291,12 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
         if (targetPdfNode && targetPdfNode.pdfUrl) {
             setActivePDFNode(targetPdfNode.id);
+            setIsPDFReaderExpanded(false);
 
             setPdfJumpLocation({
                 pageNumber: sourceNode.pdfSource.pageNumber,
-                boundingBox: sourceNode.pdfSource.boundingBox
+                boundingBox: sourceNode.pdfSource.boundingBox,
+                boundingBoxNormalized: sourceNode.pdfSource.boundingBoxNormalized
             });
 
             setPDFReaderVisible(true);
@@ -1129,12 +1311,27 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
         nodeSaveTimeoutsRef.current[nodeId] = setTimeout(async () => {
             if (!accessToken) return;
-            // Call the helper
-            await apiService.saveNode(sessionId, nodeId, data, accessToken);
+            const saved = await apiService.saveNode(sessionId, nodeId, data, accessToken);
+            if (!saved) toast.error('Could not save your changes. Check your connection and try again.');
             delete nodeSaveTimeoutsRef.current[nodeId];
         }, 1000);
     }, [accessToken, sessionId]);
 
+    // const debouncedSaveCard = useCallback((cardId: string, data: any) => {
+    //   if (cardSaveTimeoutsRef.current[cardId]) clearTimeout(cardSaveTimeoutsRef.current[cardId]);
+    //   cardSaveTimeoutsRef.current[cardId] = setTimeout(async () => {
+    //     if (!accessToken) return;
+    //     try {
+    //       await fetch(`${API_BASE_URL}/cards/${cardId}`, {
+    //         method: 'PATCH',
+    //         headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    //         body: JSON.stringify(data)
+    //       });
+    //     } catch (err) { console.error('Failed to save card', err); }
+    //     delete cardSaveTimeoutsRef.current[cardId];
+    //   }, 1000);
+    // }, [accessToken]);
+    
     const saveConnectionData = useCallback(async (connectionId: string, data: any) => {
         if (!accessToken) return;
         // Call the helper (isNew = false by default)
@@ -1145,7 +1342,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const handleOpenPDFReader = useCallback((nodeId: string) => {
         const node = nodes.find(n => n.id === nodeId);
         if (node && node.type === 'pdf' && node.pdfUrl) {
+            setPdfJumpLocation(null);
             setActivePDFNode(nodeId);
+            setIsPDFReaderExpanded(false);
             setPDFReaderVisible(true);
         }
     }, [nodes]);
@@ -1531,6 +1730,44 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         }));
     };
 
+    const focusNode = useCallback((nodeId: string) => {
+      const node = nodesRef.current.find(n => n.id === nodeId);
+      const box = containerRef.current?.getBoundingClientRect();
+      if (!node || !box) return;    
+
+      const toScale = 0.9;
+      const canvasWidth = isWorkspaceChatOpen
+        ? Math.max(0, box.width - workspaceChatWidth - (editingNodeId ? workspaceEditorWidth : 0))
+        : box.width;
+      const toVp = {
+        x: canvasWidth / 2 - (node.x + node.width / 2) * toScale,
+        y: box.height / 2 - (node.y + node.height / 2) * toScale,
+      };
+      const fromVp = viewportRef.current;
+      const fromScale = scaleRef.current;
+      const start = performance.now();
+      const DURATION = 400;    
+
+      cancelAnimationFrame(animRef.current as number);
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / DURATION);
+        const e = 1 - Math.pow(1 - t, 3);
+        setViewport({ x: fromVp.x + (toVp.x - fromVp.x) * e, y: fromVp.y + (toVp.y - fromVp.y) * e });
+        setScale(fromScale + (toScale - fromScale) * e);
+        if (t < 1) animRef.current = requestAnimationFrame(tick);
+      };
+      animRef.current = requestAnimationFrame(tick);    
+
+      setSelectedId(nodeId);
+      setHighlightId(nodeId);
+      setTimeout(() => setHighlightId(null), 1200);
+    }, [isWorkspaceChatOpen, workspaceChatWidth, workspaceEditorWidth, editingNodeId]);    
+
+    useEffect(() => {
+      if (focusRequest?.nodeId) focusNode(focusRequest.nodeId);
+    }, [focusRequest?.ts]);   // eslint-disable-line react-hooks/exhaustive-deps    
+
+
     const handleDropOnCanvas = async (e: React.DragEvent) => {
         e.preventDefault();
 
@@ -1538,6 +1775,13 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         const rect = e.currentTarget.getBoundingClientRect();
         const x = (e.clientX - rect.left - viewport.x) / scale - 160;
         const y = (e.clientY - rect.top - viewport.y) / scale - 100;
+
+        const cardData = e.dataTransfer.getData('application/card');
+        if (cardData) {
+            e.dataTransfer.dropEffect = 'link';
+            placeCard(normalizeCard(JSON.parse(cardData)), { x, y });
+            return;
+        }
 
         if (projectNoteData) {
             addToHistory();
@@ -1625,32 +1869,111 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         }
     };
 
-
+    useEffect(() => {
+      const h = (e: KeyboardEvent) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteMode('add'); }
+      };
+      window.addEventListener('keydown', h);
+      return () => window.removeEventListener('keydown', h);
+    }, []);
+    
+    const boardTags = useMemo(() => {
+      const s = new Set<string>();
+      nodes.forEach(n => n.cardId && cards[n.cardId]?.tags?.forEach(t => s.add(t)));
+      return Array.from(s).sort();
+    }, [nodes, cards]);
+    
+    
     const handleUpdateNodeContent = (id: string, newContent: string) => {
-        const node = nodes.find(n => n.id === id);
-        if (!node) return;
-
-        if (node.globalNoteId) {
-            handleUpdateNote(node.globalNoteId, { content: newContent });
-        } else {
-            updateNodes(prev => prev.map(n => n.id === id ? { ...n, content: newContent } : n));
-
-            debouncedSaveNode(id, { content: newContent });
-        }
+      const node = nodes.find(n => n.id === id);
+      if (!node) return;
+      if (node.kind === 'card' && node.cardId) { patchCard(node.cardId, { content: newContent }); return; }
+      if (node.globalNoteId) handleUpdateNote(node.globalNoteId, { content: newContent });
+      else {
+        updateNodes(prev => prev.map(n => n.id === id ? { ...n, content: newContent } : n));
+        debouncedSaveNode(id, { content: newContent });
+      }
     };
 
+    const handleUpdateWhiteboard = useCallback((id: string, changes: { content?: unknown; title?: string }) => {
+      const node = nodesRef.current.find(item => item.id === id);
+      if (!node) return;
+
+      const hasContent = Object.prototype.hasOwnProperty.call(changes, 'content');
+      const serializedContent = hasContent
+        ? JSON.stringify(changes.content ?? null) ?? 'null'
+        : node.content;
+      const nextTitle = changes.title ?? node.title;
+      const nodeChanges = { content: serializedContent, title: nextTitle };
+
+      if (isCollaborativeMode) {
+        collab.updateYCanvasNode(id, nodeChanges);
+      } else {
+        updateNodes(prev => prev.map(item => item.id === id ? { ...item, ...nodeChanges } : item));
+      }
+      debouncedSaveNode(id, nodeChanges);
+    }, [isCollaborativeMode, collab, updateNodes, debouncedSaveNode]);
+
+    const placeCard = useCallback(async (card: Card, at?: { x: number; y: number }) => {
+      const existing = nodesRef.current.find(n => n.cardId === card.id);
+      if (existing) { focusNode(existing.id); return; }
+    
+      const x = at?.x ?? (-viewportRef.current.x + window.innerWidth / 2) / scaleRef.current - 210;
+      const y = at?.y ?? (-viewportRef.current.y + window.innerHeight / 2) / scaleRef.current - 100;
+    
+      addToHistory();
+      const newNodeId = `n-${Date.now()}`;
+      const newNode: NodeData = {
+        id: newNodeId, type: card.type, title: '', content: '', kind: 'card', cardId: card.id,
+        x, y, width: 420, height: 200, color: 'white', childIds: [], level: 0, isExpanded: true,
+      };
+      upsertCards([{ ...card, boardCount: (card.boardCount || 0) + 1 }]);
+    
+      if (isCollaborativeMode) collab.addYCanvasNode({ ...newNode } as any);
+      else updateNodes(prev => [...prev, newNode]);
+      setSelectedId(newNodeId);
+    
+      if (accessToken) {
+        try {
+          await fetch(`${API_BASE_URL}/nodes`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              canvas_id: sessionId, node_id: newNodeId, branch_id: 'main', parent_node_id: null,
+              node_type: card.type, kind: 'card', card_id: card.id, title: '', content: '',
+              position_x: x, position_y: y, width: 420, height: 200, level: 0, color: 'white', is_expanded: true,
+            }),
+          });
+        } catch (err) { console.error('Failed to save card placement', err); }
+      }
+    }, [focusNode, addToHistory, upsertCards, isCollaborativeMode, collab, updateNodes, accessToken, sessionId]);
+    
+    const openCard = useCallback(async (cardId: string) => {
+      const onBoard = nodesRef.current.find(n => n.cardId === cardId);
+      if (onBoard) return focusNode(onBoard.id);
+      const card = cards[cardId] ?? (await loadCards([cardId]))[0];
+      if (card) placeCard(card); else toast.error('Card not found');
+    }, [cards, focusNode, loadCards, placeCard]);
+    
+    const openBoard = useCallback((canvasId: string, nodeId: string) => {
+      if (canvasId === sessionId) focusNode(nodeId);
+      else onNavigateBoard?.(canvasId, nodeId);   // new prop, see notes
+    }, [sessionId, focusNode, onNavigateBoard]);
+    
     const handleUpdateNodeTitle = (id: string, newTitle: string) => {
-        const node = nodes.find(n => n.id === id);
-        if (!node) return;
-
-        if (node.globalNoteId) {
-            handleUpdateNote(node.globalNoteId, { title: newTitle });
-        } else {
-            updateNodes(prev => prev.map(n => n.id === id ? { ...n, title: newTitle } : n));
-
-            debouncedSaveNode(id, { title: newTitle });
-        }
+      const node = nodes.find(n => n.id === id);
+      if (!node) return;
+    
+      if (node.kind === 'card' && node.cardId) { patchCard(node.cardId, { title: newTitle }); return; }
+    
+      if (node.globalNoteId) {
+        handleUpdateNote(node.globalNoteId, { title: newTitle });
+      } else {
+        updateNodes(prev => prev.map(n => n.id === id ? { ...n, title: newTitle } : n));
+        debouncedSaveNode(id, { title: newTitle });
+      }
     };
+    
 
     const handleUpdateNodeSize = useCallback((id: string, size: { width: number, height: number }) => {
         updateNodes(prev => prev.map(n => {
@@ -1756,14 +2079,23 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const handleUploadPdf = useCallback((id: string, file: File) => {
         if (file.type !== 'application/pdf') return alert('Please upload a valid PDF file.');
         if (UserPlanID === 'free') return toast.error("Upgrade to Pro to upload files");
+        if (!beginNodeOperation(id, 'uploading')) return toast.info('This node is already being updated');
         addToHistory();
 
-        readFileAsBase64(file).then(async (base64Content) => {
+        void (async () => {
             try {
+                const base64Content = await readFileAsBase64(file);
                 const data = await apiService.uploadFile(sessionId, { path: file.name, content: base64Content }, accessToken);
-
                 const serverUrl = `${pythonUrl}${data.file.path}`;
                 const s3Key = data.file.s3_key;
+                const saved = await apiService.saveNode(sessionId, id, {
+                    node_type: 'pdf',
+                    s3_key: s3Key,
+                    file_name: file.name,
+                    width: 400,
+                    height: 500
+                }, accessToken);
+                if (!saved) throw new Error('The PDF uploaded, but its canvas record could not be saved. Please retry.');
 
                 if (isCollaborativeMode) {
                     collab.updateYCanvasNode(id, {
@@ -1787,40 +2119,40 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         height: 500
                     } : n));
                 }
-
-                // Save to DB
-                await apiService.saveNode(sessionId, id, {
-                    node_type: 'pdf',
-                    pdf_url: serverUrl,
-                    s3_key: s3Key,
-                    file_name: file.name,
-                    width: 400,
-                    height: 500
-                }, accessToken);
-
                 toast.success("PDF Uploaded Successfully");
             } catch (error) {
                 console.error("Upload error:", error);
-                toast.error("Failed to upload PDF");
+                toast.error(error instanceof Error ? error.message : "Failed to upload PDF");
+            } finally {
+                finishNodeOperation(id);
             }
-        });
-    }, [accessToken, sessionId, addToHistory, isCollaborativeMode, collab, updateNodes, UserPlanID]);
+        })();
+    }, [accessToken, sessionId, addToHistory, isCollaborativeMode, collab, updateNodes, UserPlanID, beginNodeOperation, finishNodeOperation]);
 
     const handleUploadImage = useCallback((nodeId: string, file: File) => {
         if (UserPlanID === 'free') return toast.error("Upgrade to Pro to upload files");
+        if (!beginNodeOperation(nodeId, 'uploading')) return toast.info('This node is already being updated');
         addToHistory();
 
-        readFileAsBase64(file).then(async (base64Content) => {
+        void (async () => {
             try {
+                const base64Content = await readFileAsBase64(file);
                 const data = await apiService.uploadFile(sessionId, { path: file.name, content: base64Content }, accessToken);
                 const serverUrl = `${pythonUrl}${data.file.path}`;
+                const s3Key = data.file.s3_key;
+                const saved = await apiService.saveNode(sessionId, nodeId, {
+                    node_type: 'image',
+                    s3_key: s3Key,
+                    file_name: file.name
+                }, accessToken);
+                if (!saved) throw new Error('The image uploaded, but its canvas record could not be saved. Please retry.');
 
                 if (isCollaborativeMode) {
                     collab.updateYCanvasNode(nodeId, {
                         type: 'image',
                         imageUrl: serverUrl,
                         mediaUrl: serverUrl,
-                        s3Key: data.file.s3_key,
+                        s3Key,
                         fileName: file.name
                     });
                 } else {
@@ -1828,85 +2160,227 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         ...n,
                         imageUrl: serverUrl,
                         mediaUrl: serverUrl,
-                        s3Key: data.file.s3_key,
+                        s3Key,
                         type: 'image',
                         fileName: file.name
                     } : n));
                 }
-
-                // Save to DB
-                await apiService.saveNode(sessionId, nodeId, {
-                    node_type: 'image',
-                    media_url: serverUrl,
-                    image_url: serverUrl,
-                    s3_key: data.file.s3_key,
-                    file_name: file.name
-                }, accessToken);
-
                 toast.success("Image Uploaded");
             } catch (error) {
                 console.error("Upload error:", error);
-                toast.error("Failed to upload image");
+                toast.error(error instanceof Error ? error.message : "Failed to upload image");
+            } finally {
+                finishNodeOperation(nodeId);
             }
-        });
-    }, [accessToken, sessionId, addToHistory, isCollaborativeMode, collab, updateNodes, UserPlanID]);
+        })();
+    }, [accessToken, sessionId, addToHistory, isCollaborativeMode, collab, updateNodes, UserPlanID, beginNodeOperation, finishNodeOperation]);
+
+    const handleUploadEditorImage = useCallback(async (nodeId: string, file: File): Promise<{ url: string; s3Key: string } | null> => {
+        if (!file.type.startsWith('image/')) {
+            toast.error('Please choose a valid image file');
+            return null;
+        }
+        if (UserPlanID === 'free') {
+            toast.error('Upgrade to Pro to upload files');
+            return null;
+        }
+        if (!beginNodeOperation(nodeId, 'uploading')) {
+            toast.info('This node is already being updated');
+            return null;
+        }
+
+        try {
+            const base64Content = await readFileAsBase64(file);
+            const data = await apiService.uploadFile(sessionId, {
+                path: file.name,
+                content: base64Content,
+            }, accessToken);
+            toast.success('Image uploaded');
+            return { url: `${pythonUrl}${data.file.path}`, s3Key: data.file.s3_key };
+        } catch (error) {
+            console.error('Editor image upload error:', error);
+            toast.error(error instanceof Error ? error.message : 'Failed to upload image');
+            return null;
+        } finally {
+            finishNodeOperation(nodeId);
+        }
+    }, [accessToken, sessionId, UserPlanID, beginNodeOperation, finishNodeOperation]);
 
 
-    const getRenderNodes = () => {
-        return nodes.map(node => {
-            if (node.globalNoteId) {
-                const globalNote = globalNotes.find(gn => gn.id === node.globalNoteId);
-                if (globalNote) {
-                    return {
-                        ...node,
-                        title: globalNote.title,
-                        content: globalNote.content,
-                        color: globalNote.color
-                    };
-                }
+    // const getRenderNodes = () => {
+    //     return nodes.map(node => {
+    //         if (node.globalNoteId) {
+    //             const globalNote = globalNotes.find(gn => gn.id === node.globalNoteId);
+    //             if (globalNote) {
+    //                 return {
+    //                     ...node,
+    //                     title: globalNote.title,
+    //                     content: globalNote.content,
+    //                     color: globalNote.color
+    //                 };
+    //             }
+    //         }
+
+    //         if (node.projectNoteId) {
+    //             const isLoading = loadingRefIds.has(node.projectNoteId);
+    //             const projectNote = projectNotes.find(pn => pn.session_id === node.projectNoteId);
+    //             if (projectNote) {
+    //                 const fullContent = projectNote.blocks
+    //                     ?.map((b: any) => b.content)
+    //                     .join('\n\n') || '';
+
+    //                 return {
+    //                     ...node,
+    //                     title: projectNote.title,
+    //                     content: fullContent,
+    //                     isLoading: false
+    //                 };
+    //             }
+    //             if (isLoading) {
+    //                 return {
+    //                     ...node,
+    //                     content: '',
+    //                     isLoading: true
+    //                 };
+    //             }
+    //         }
+
+    //         return { ...node, isLoading: false };
+    //     });
+    // };
+
+    const renderNodes = useMemo(() => nodes.map(node => {
+      // NEW: card placement -> join with its card
+      if (node.kind === 'card' && node.cardId) {
+        const card = cards[node.cardId];
+        if (card) {
+          const tags = card.tags ?? [];
+          return {
+            ...node, title: card.title, content: card.content, boardCount: card.boardCount, tags,
+            dimmed: tagFilter.length > 0 && !tagFilter.every(t => tags.includes(t)),
+            isLoading: false,
+          };
+        }
+        return { ...node, content: '', isLoading: true };
+      }
+    
+      // legacy global note branch (unchanged)
+      if (node.globalNoteId) {
+        const globalNote = globalNotes.find(gn => gn.id === node.globalNoteId);
+        if (globalNote) {
+          return { ...node, title: globalNote.title, content: globalNote.content, color: globalNote.color };
+        }
+      }
+    
+      // legacy project note branch (unchanged)
+      if (node.projectNoteId) {
+        const isLoading = loadingRefIds.has(node.projectNoteId);
+        const projectNote = projectNotes.find(pn => pn.session_id === node.projectNoteId);
+        if (projectNote) {
+          const fullContent = projectNote.blocks?.map((b: any) => b.content).join('\n\n') || '';
+          return { ...node, title: projectNote.title, content: fullContent, isLoading: false };
+        }
+        if (isLoading) return { ...node, content: '', isLoading: true };
+      }
+    
+      return { ...node, isLoading: false };
+    }), [nodes, cards, globalNotes, projectNotes, loadingRefIds, tagFilter]);
+    
+    useLayoutEffect(() => { nodesRef.current = renderNodes; }, [renderNodes]);
+    const editingNode = renderNodes.find(n => n.id === editingNodeId);
+
+    useEffect(() => () => dockResizeCleanupRef.current?.(), []);
+
+    const startDockResize = (pane: 'chat' | 'editor', event: React.PointerEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dockResizeCleanupRef.current?.();
+
+        const bounds = containerRef.current?.getBoundingClientRect();
+        if (!bounds) return;
+
+        const startX = event.clientX;
+        const startChatWidth = workspaceChatWidth;
+        const startEditorWidth = editingNodeId ? workspaceEditorWidth : 0;
+        const startViewportX = viewport.x;
+        const startDockWidth = startChatWidth + startEditorWidth;
+        const hasEditorPane = Boolean(editingNodeId);
+        const minCanvasWidth = hasEditorPane || bounds.width < 768 ? 0 : Math.min(280, bounds.width * 0.24);
+        const minPaneWidth = bounds.width < 768 ? 160 : 320;
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const handleMove = (moveEvent: PointerEvent) => {
+            const delta = startX - moveEvent.clientX;
+            let nextChatWidth = startChatWidth;
+            let nextEditorWidth = startEditorWidth;
+
+            if (pane === 'chat') {
+                const maxChatWidth = hasEditorPane
+                    ? Math.max(minPaneWidth, bounds.width - minPaneWidth)
+                    : Math.max(minPaneWidth, bounds.width - minCanvasWidth);
+                nextChatWidth = Math.min(maxChatWidth, Math.max(minPaneWidth, startChatWidth + delta));
+                if (hasEditorPane) nextEditorWidth = Math.max(minPaneWidth, bounds.width - nextChatWidth);
+            } else {
+                const maxEditorWidth = Math.max(minPaneWidth, bounds.width - startChatWidth - minCanvasWidth);
+                nextEditorWidth = Math.min(maxEditorWidth, Math.max(minPaneWidth, startEditorWidth + delta));
             }
 
-            if (node.projectNoteId) {
-                const isLoading = loadingRefIds.has(node.projectNoteId);
-                const projectNote = projectNotes.find(pn => pn.session_id === node.projectNoteId);
-                if (projectNote) {
-                    const fullContent = projectNote.blocks
-                        ?.map((b: any) => b.content)
-                        .join('\n\n') || '';
+            setWorkspaceChatWidth(nextChatWidth);
+            if (editingNodeId) setWorkspaceEditorWidth(nextEditorWidth);
+            setViewport(current => ({
+                ...current,
+                x: startViewportX - ((nextChatWidth + nextEditorWidth - startDockWidth) / 2),
+            }));
+        };
 
-                    return {
-                        ...node,
-                        title: projectNote.title,
-                        content: fullContent,
-                        isLoading: false
-                    };
-                }
-                if (isLoading) {
-                    return {
-                        ...node,
-                        content: '',
-                        isLoading: true
-                    };
-                }
-            }
+        const cleanup = () => {
+            window.removeEventListener('pointermove', handleMove);
+            window.removeEventListener('pointerup', cleanup);
+            window.removeEventListener('pointercancel', cleanup);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            dockResizeCleanupRef.current = null;
+        };
 
-            return { ...node, isLoading: false };
-        });
+        dockResizeCleanupRef.current = cleanup;
+        window.addEventListener('pointermove', handleMove);
+        window.addEventListener('pointerup', cleanup);
+        window.addEventListener('pointercancel', cleanup);
     };
+    const editorLinkTargets = useMemo<NoteLinkTarget[]>(() => renderNodes.map(node => ({
+      id: node.kind === 'card' && node.cardId ? node.cardId : node.id,
+      title: node.title || 'Untitled',
+      content: node.kind === 'card' && node.cardId ? cards[node.cardId]?.content || '' : node.content || '',
+    })), [renderNodes, cards]);
 
-    const renderNodes = getRenderNodes();
-    const editingNode = nodes.find(n => n.id === editingNodeId);
+    const openEditorLink = useCallback(async (targetId: string) => {
+      const targetNode = nodesRef.current.find(node => node.cardId === targetId)
+        || nodesRef.current.find(node => node.id === targetId);
+      if (targetNode) {
+        focusNode(targetNode.id);
+        setEditingNodeId(null);
+        return;
+      }
+      const targetCard = cards[targetId] || (await loadCards([targetId]))[0];
+      if (targetCard) {
+        setEditingNodeId(null);
+        placeCard(targetCard);
+      }
+    }, [cards, focusNode, loadCards, placeCard]);
 
     const createNewNode = useCallback(async (
         options: {
             parentId?: string | null;
             type?: NodeData['type'];
             fileData?: any;
+            asCard?: boolean;
             position?: { x: number; y: number };
             isGroup?: boolean;
         }
     ) => {
-        const { parentId = null, type = 'text', fileData, position, isGroup = false } = options;
+        const { parentId = null, type = 'text', fileData, asCard = false, position, isGroup = false } = options;
 
         const newNodeId = isGroup ? `g-${Date.now()}` : `n-${Date.now()}`;
 
@@ -1945,12 +2419,16 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         const newNode: NodeData = {
             id: newNodeId,
             type: isGroup ? 'group' : type,
-            title: fileData?.name || (isGroup ? 'New Group' : 'New Node'),
-            content: fileData ? fileData.content : 'Click edit button to write',
+            title: fileData?.name || (isGroup ? 'New Group' : asCard ? 'New Card' : type === 'whiteboard' ? 'New Whiteboard' : 'New Node'),
+            content: fileData
+                ? fileData.content
+                : type === 'whiteboard'
+                    ? ''
+                    : 'Click edit button to write',
             x: calculatedX,
             y: calculatedY,
             width: isGroup ? 300 : 420,
-            height: isGroup ? 300 : (type === 'image' || type === 'pdf' ? 300 : 200),
+            height: isGroup ? 300 : type === 'whiteboard' ? 250 : (type === 'image' || type === 'pdf' ? 300 : 200),
             color: parentNode ? parentNode.color : (isGroup ? 'slate' : 'white'),
             parentId: parentId || undefined,
             childIds: [],
@@ -1960,8 +2438,18 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
             ...(fileData?.fileName && { fileName: fileData.fileName }),
             ...(fileData?.mediaUrl && { mediaUrl: fileData.mediaUrl }),
             ...(fileData?.pdfUrl && { pdfUrl: fileData.pdfUrl }),
-            ...(fileData?.s3_key && { s3_key: fileData.s3_key }),
+            ...((fileData?.s3_key || fileData?.s3Key) && { s3Key: fileData.s3_key || fileData.s3Key }),
         };
+
+        let newCard: Card | null = null;
+        if (asCard && !isGroup && type === 'text') {
+          const cardId = `card-${crypto.randomUUID()}`;
+          newCard = { id: cardId, type: 'text', title: newNode.title, content: newNode.content, boardCount: 1 };
+          newNode.kind = 'card';
+          newNode.cardId = cardId;
+          newNode.content = '';          // content now lives on the card
+        }
+        
 
         // Connection logic
         let newConnection: Connection | null = null;
@@ -1979,6 +2467,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         }
 
         addToHistory();
+        
+        if (newCard) upsertCards([newCard]);
 
         if (isCollaborativeMode) {
             // Convert to Y.js structure (FLAT x, y)
@@ -2000,7 +2490,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                 ...(newNode.fileName && { fileName: newNode.fileName }),
                 ...(newNode.mediaUrl && { mediaUrl: newNode.mediaUrl }),
                 ...(newNode.pdfUrl && { pdfUrl: newNode.pdfUrl }),
-                ...(newNode.s3Key && { s3Key: newNode.s3Key })
+                ...(newNode.s3Key && { s3Key: newNode.s3Key }),
+                ...(newNode.kind && { kind: newNode.kind }), 
+                ...(newNode.cardId && { cardId: newNode.cardId }),
             };
 
             collab.addYCanvasNode(yNode as any);
@@ -2048,9 +2540,15 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     is_expanded: newNode.isExpanded,
                     file_type: fileData?.fileType,
                     file_name: fileData?.fileName,
-                    media_url: fileData?.mediaUrl,
-                    pdf_url: fileData?.pdfUrl,
-                    s3_key: fileData?.s3_key || ''
+                    media_url: (fileData?.s3_key || fileData?.s3Key) ? undefined : fileData?.mediaUrl,
+                    pdfUrl: (fileData?.s3_key || fileData?.s3Key) ? undefined : fileData?.pdfUrl,
+                    s3_key: fileData?.s3_key || fileData?.s3Key || '',
+                    kind: newNode.kind || 'note',
+                    card_id: newNode.cardId,
+                    card: newCard ? {
+                      card_id: newCard.id, card_type: newCard.type, title: newCard.title, content: newCard.content
+                    } : undefined,
+                    
                 })
             });
 
@@ -2082,6 +2580,108 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
         updateNodes, updateConnections, API_BASE_URL, isCollaborativeMode, collab]);
 
+    const convertToCard = useCallback(async (nodeId: string) => {
+      if (!accessToken) return;
+      const node = nodesRef.current.find(n => n.id === nodeId);
+      if (!node || node.kind === 'card' || isGroupNode(node) || node.type !== 'text') return;
+    
+      // a pending debounced note save would overwrite the converted node
+      if (nodeSaveTimeoutsRef.current[nodeId]) {
+        clearTimeout(nodeSaveTimeoutsRef.current[nodeId]);
+        delete nodeSaveTimeoutsRef.current[nodeId];
+      }
+    
+      const cardId = `card-${crypto.randomUUID()}`;
+      const card: Card = { id: cardId, type: 'text', title: node.title, content: node.content || '', boardCount: 1 };
+    
+      // optimistic update
+      upsertCards([card]);
+    //   setCards(prev => ({ ...prev, [cardId]: card }));
+      if (isCollaborativeMode) {
+        collab.updateYCanvasNode(nodeId, { kind: 'card', cardId, content: '' } as any);
+      } else {
+        updateNodes(prev => prev.map(n => n.id === nodeId ? { ...n, kind: 'card', cardId, content: '' } : n));
+      }
+    
+      try {
+        const res = await fetch(`${API_BASE_URL}/cards/convert`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            canvas_id: sessionId, branch_id: 'main', node_id: nodeId,
+            card: { card_id: cardId, card_type: 'text', title: card.title, content: card.content }
+          })
+        });
+        if (!res.ok) throw new Error(`convert failed: ${res.status}`);
+        toast.success('Converted to card');
+      } catch (err) {
+        console.error(err);
+        toast.error('Could not convert to card');
+        // roll back
+        removeCard(cardId);
+        if (isCollaborativeMode) {
+          collab.updateYCanvasNode(nodeId, { kind: 'note', cardId: undefined, content: card.content } as any);
+        } else {
+          updateNodes(prev => prev.map(n => n.id === nodeId ? { ...n, kind: 'note', cardId: undefined, content: card.content } : n));
+        }
+      }
+    }, [accessToken, sessionId, isCollaborativeMode, collab, updateNodes]);
+
+    const handleApplyNoteToSelection = useCallback(async (noteContent: string, messageId?: string) => {
+      const selectedNode = nodesRef.current.find(node => node.id === selectedId);
+      if (!selectedNode) {
+        onApplyNote?.(noteContent, messageId);
+        return;
+      }
+
+      const toEditorHtml = (content: string) => {
+        const trimmedContent = content.trim();
+        if (!trimmedContent) return '<p></p>';
+        if (/<[a-z][\s\S]*>/i.test(trimmedContent)) return trimmedContent;
+        return marked.parse(trimmedContent) as string;
+      };
+
+      if (isGroupNode(selectedNode)) {
+        const newNodeId = await createNewNode({
+          parentId: selectedNode.id,
+          type: 'text',
+          fileData: {
+            name: 'AI Response',
+            content: toEditorHtml(noteContent),
+          },
+        });
+        setEditingNodeId(newNodeId);
+        toast.success('Knowledge added inside the group');
+        return;
+      }
+
+      if (selectedNode.type === 'whiteboard' || selectedNode.projectNoteId) {
+        toast.error('Knowledge Tap cannot add text directly to this node');
+        return;
+      }
+
+      let existingContent = selectedNode.content || '';
+      if (selectedNode.kind === 'card' && selectedNode.cardId) {
+        const card = cards[selectedNode.cardId] ?? (await loadCards([selectedNode.cardId]))[0];
+        if (!card) {
+          toast.error('Could not load the selected card');
+          return;
+        }
+        existingContent = card.content || '';
+      }
+
+      const hasPlaceholderContent = existingContent.trim() === 'Click edit button to write';
+      const existingHtml = hasPlaceholderContent ? '' : toEditorHtml(existingContent);
+      const responseHtml = toEditorHtml(noteContent);
+      const combinedContent = existingHtml
+        ? `${existingHtml}<p></p>${responseHtml}`
+        : responseHtml;
+
+      handleUpdateNodeContent(selectedNode.id, combinedContent);
+      setEditingNodeId(selectedNode.id);
+      toast.success(selectedNode.kind === 'card' ? 'Knowledge added to card' : 'Knowledge added to node');
+    }, [selectedId, nodesRef, onApplyNote, createNewNode, cards, loadCards, handleUpdateNodeContent]);
+    
     const handleCreateNode = () => {
         createNewNode({ type: 'text' });
     };
@@ -2090,6 +2690,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         createNewNode({ type: 'group', isGroup: true });
     };
 
+    const handleCreateCard = () => createNewNode({ type: 'text', asCard: true });
+    const handleCreateWhiteboard = () => createNewNode({ type: 'whiteboard' });
     const handleAddChildNode = (parentId: string) => {
         createNewNode({ parentId, type: 'text' });
     };
@@ -2149,8 +2751,16 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const selectedNode = renderNodes.find(n => n.id === selectedId);
     const selectedConnection = connections.find(c => c.id === selectedId);
     const selectedObject = selectedNode || selectedConnection;
-    const isSelectedType = selectedNode ? (selectedNode.globalNoteId ? 'Ref. Node' : (isGroupNode(selectedNode) ? 'Group' : 'Node')) : (selectedConnection ? 'Connection' : '');
+    const isSelectedType = selectedNode
+      ? (selectedNode.kind === 'card' ? 'Card' : selectedNode.globalNoteId ? 'Ref. Node' : isGroupNode(selectedNode) ? 'Group' : selectedNode.type === 'whiteboard' ? 'Whiteboard' : 'Node')
+      : (selectedConnection ? 'Connection' : '');
 
+
+    const selectedCard =
+      selectedNode?.kind === 'card' && selectedNode.cardId ? cards[selectedNode.cardId] : undefined;
+    
+    
+      
     const menuPosition = useMemo(() => {
         if (!selectedId) return null;
 
@@ -2212,8 +2822,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             projectNoteIdsToFetch.add(node.project_note_id);
                         }
 
-                        let pdfUrl = node?.pdf_url;
-                        let mediaUrl = node?.media_url;
+                        let pdfUrl = node?.pdfUrl || node?.pdf_url || node?.media_url;
+                        let mediaUrl = node?.media_url || node?.image_url;
 
                         if (node?.s3_key && node?.node_type === 'pdf') {
                             const downloadedUrl = await downloadFileToWorkspace(node.s3_key);
@@ -2231,9 +2841,15 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                 : node.metadata;
 
                             if (metadata.pdfSource) {
-                                restoredPdfSource = metadata.pdfSource;
+                                restoredPdfSource = {
+                                    ...metadata.pdfSource,
+                                    fileUrl: pdfUrl || metadata.pdfSource.fileUrl,
+                                };
                             }
                         }
+
+                        const storedContent = (node.project_note_id || node.card_id) ? '' : (node.content || '');
+                        const content = await restoreInlineImageSources(storedContent, user?.accessToken);
 
                         let youtubeId = undefined;
                         if (node.node_type === 'youtube' && node?.media_url) {
@@ -2246,7 +2862,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             id: node.node_id,
                             type: node.node_type,
                             title: node.title,
-                            content: node.project_note_id ? "" : node.content,
+                            content,
                             x: node.position_x,
                             y: node.position_y,
                             width: node.width || 420,
@@ -2260,12 +2876,14 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             fileName: node.file_name,
                             imageUrl: mediaUrl,
                             pdfUrl: pdfUrl,
+                            fileName: node.file_name,
                             s3Key: node.s3_key,
                             youtubeId: youtubeId,
                             projectNoteId: node.project_note_id,
                             globalNoteId: node.global_note_id,
-                            pdfFile: "Retrive pdf",
                             pdfSource: restoredPdfSource,
+                            kind: node.kind === 'card' ? 'card' : 'note',                            // add
+                            cardId: node.card_id,                                                    // add
                         };
                     }));
 
@@ -2313,7 +2931,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                 ...(node.youtubeId && { youtubeId: node.youtubeId }),
                                 ...(node.projectNoteId && { projectNoteId: node.projectNoteId }),
                                 ...(node.globalNoteId && { globalNoteId: node.globalNoteId }),
-                                ...(node.pdfSource && { pdfSource: node.pdfSource })
+                                ...(node.pdfSource && { pdfSource: node.pdfSource }),
+                                ...(node.kind && { kind: node.kind }),
+                                ...(node.cardId && { cardId: node.cardId }),
                             } as any);
                         });
 
@@ -2363,7 +2983,6 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
         fetchCanvasState();
     }, [sessionId, user?.accessToken, isCollaborativeMode, downloadFileToWorkspace]);
-
 
     const renderCollaborativeStatus = useMemo(() => {
         if (!isCollaborativeMode) return null;
@@ -2431,6 +3050,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     return (
 
             <div
+                ref={containerRef}
                 className={`w-full h-full overflow-hidden bg-canvas bg-dot-pattern relative 
                     ${connectingNodeId ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}
                     `}
@@ -2443,7 +3063,12 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
                     onMouseDown={(e) => handleMouseDown(e, 'canvas', null)}
-                    onDragOver={(e) => e.preventDefault()}
+                    onDragOver={(e) => {
+                        e.preventDefault();
+                        if (Array.from(e.dataTransfer.types).includes('application/card')) {
+                            e.dataTransfer.dropEffect = 'link';
+                        }
+                    }}
                     onDrop={handleDropOnCanvas}
                     >
                
@@ -2456,11 +3081,38 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     onClose={() => setIsSidebarOpen(false)}
                     projectId={projectInfo?.projectId}
                     userInfo={userinfo}
+                    searchCards={search}
+                    searchTags={searchTags}
                 />
 
                 {renderCollaborativeStatus}
                 {renderStreamingIndicator}
-
+                <TagFilterBar
+                  tags={boardTags} active={tagFilter}
+                  onToggle={t => setTagFilter(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t])}
+                  onClear={() => setTagFilter([])}
+                />
+                
+                {selectedCard && (
+                  <CardMetaPanel
+                    card={selectedCard} suggestions={suggestTags} refreshKey={linksVersion}
+                    onTagsChange={t => updateTags(selectedCard.id, t)}
+                    getLinks={getLinks} getBoards={getBoards}
+                    currentBoard={{ canvas_id: sessionId, title: projectInfo?.title || sessionId, node_id: selectedNode?.id || '' }}
+                    onOpenCard={openCard} onOpenBoard={openBoard}
+                    onAddLink={() => setPaletteMode('link')} onRemoveLink={removeLink}
+                  />
+                )}
+                
+                <CardSearchPalette
+                  open={!!paletteMode} mode={paletteMode ?? 'add'} onClose={() => setPaletteMode(null)}
+                  search={search} suggestTags={suggestTags}
+                  onPick={async card => {
+                    if (paletteMode === 'link' && selectedCard) await addLink(selectedCard.id, card.id);
+                    else placeCard(card);
+                    setPaletteMode(null);
+                  }}
+                />
                 {connectingNodeId && (
                     <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-2 rounded-full shadow-lg z-[60] flex items-center gap-3 animate-in slide-in-from-top-2">
                         <span className="text-sm font-medium">Click a target Node or Group to link</span>
@@ -2516,8 +3168,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                             onClick={() => setEditingNodeId(selectedNode.id)}
                                             className="flex items-center justify-center gap-2 w-full px-3 py-1.5 bg-gray-50 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-100 transition-colors"
                                         >
-                                            <FileText size={14} />
-                                            <span>Edit Text</span>
+                                            {selectedNode.type === 'whiteboard' ? <Paintbrush size={14} /> : <FileText size={14} />}
+                                            <span>{selectedNode.type === 'whiteboard' ? 'Open Whiteboard' : 'Edit Text'}</span>
                                         </button>
                                     )}
                                 </div>
@@ -2551,6 +3203,17 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                     />
                                 </div>
                             )}
+
+                            {selectedNode && selectedNode.kind !== 'card' && selectedNode.type === 'text' && !isGroupNode(selectedNode)
+                              && !selectedNode.projectNoteId && !selectedNode.globalNoteId && (
+                              <button
+                                onClick={() => convertToCard(selectedNode.id)}
+                                className="mt-1.5 flex items-center justify-center gap-2 w-full px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-100 transition-colors"
+                              >
+                                <Layers size={14} />
+                                <span>Convert to card</span>
+                              </button>
+                            )}
                         </div>
                     </div>
                 )}
@@ -2574,6 +3237,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                         <button onClick={redo} disabled={historyIndex >= history.length - 1} className="p-2 hover:bg-gray-50 rounded-xl text-gray-600 disabled:opacity-30 transition-colors" title="Redo">
                             <Redo2 size={20} />
                         </button>
+                        <button onClick={handleCreateCard} className="p-2 hover:bg-emerald-50 hover:text-emerald-600 rounded-xl text-gray-600 transition-colors" title="Create Card">
+                          <Layers size={20} />
+                        </button>                        
 
                         <div className="h-[1px] w-4/5 bg-gray-100 my-1"></div>
                         <button
@@ -2589,6 +3255,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     <div className="bg-white shadow-lg shadow-gray-200/50 rounded-2xl p-2 flex flex-col gap-2 border border-gray-100">
                         <button onClick={handleCreateNode} className="p-2 hover:bg-blue-50 hover:text-blue-600 rounded-xl text-gray-600 transition-colors" title="Create Node">
                             <StickyNote size={20} />
+                        </button>
+                        <button onClick={handleCreateWhiteboard} className="p-2 hover:bg-violet-50 hover:text-violet-600 rounded-xl text-gray-600 transition-colors" title="Create Whiteboard">
+                            <Paintbrush size={20} />
                         </button>
                         <button onClick={handleCreateGroup} className="p-2 hover:bg-purple-50 hover:text-purple-600 rounded-xl text-gray-600 transition-colors" title="Create Group">
                             <LayoutGrid size={20} />
@@ -2608,25 +3277,127 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     </div>
                 </div>
 
-                <CanvasAiInput
-                    prompt={aiPrompt}
-                    setPrompt={setAiPrompt}
-                    onSubmit={handleAskAi}
-                    isLoading={isAiLoading}
-                    selectedNode={renderNodes.find(n => n.id === selectedId)}
-                    nodes={nodes}
-                    selectedModelId={selectedModel}
-                    onModelChange={onModelChange}
-                    availableModels={AVAILABLE_MODELS}
-                />
+                {!isWorkspaceChatOpen && <button
+                    type="button"
+                    onMouseDown={event => event.stopPropagation()}
+                    onClick={() => {
+                        const selectedNode = renderNodes.find(node => node.id === selectedId);
+                        setWorkspaceChatContext(selectedNode
+                            ? { title: selectedNode.title || 'Untitled', content: selectedNode.content || '' }
+                            : null);
+                        const bounds = containerRef.current?.getBoundingClientRect();
+                        const chatWidth = bounds
+                            ? (bounds.width < 768
+                                ? bounds.width * 0.65
+                                : Math.min(560, Math.max(320, bounds.width * 0.36)))
+                            : 0;
+                        const minCanvasWidth = bounds && !editingNodeId && bounds.width >= 768
+                            ? Math.min(280, bounds.width * 0.24)
+                            : 0;
+                        const editorWidth = editingNodeId && bounds
+                            ? Math.max(160, bounds.width - chatWidth)
+                            : 0;
+                        if (editingNodeId) setWorkspaceEditorWidth(editorWidth);
+                        setWorkspaceChatWidth(chatWidth);
+                        setViewport(current => ({ ...current, x: current.x - (chatWidth + editorWidth) / 2 }));
+                        setIsWorkspaceChatOpen(true);
+                    }}
+                    className="absolute bottom-12 left-1/2 z-50 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-gray-200 bg-white px-5 py-3 text-sm font-medium text-gray-800 shadow-xl transition hover:bg-gray-50"
+                >
+                    <AtomIcon size={17} className="text-blue-600" />
+                    AgentOS
+                </button>}
+
+                {isWorkspaceChatOpen && (
+                    <section
+                        className="fixed inset-y-0 right-0 z-[70] flex flex-col border-l border-gray-200 bg-canvas bg-dot-pattern shadow-2xl"
+                        style={{
+                            width: workspaceChatWidth,
+                            backgroundColor: '#ffffff',
+                            backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)',
+                            backgroundSize: '20px 20px',
+                        }}
+                        onMouseDown={event => event.stopPropagation()}
+                        onMouseMove={event => event.stopPropagation()}
+                        onWheel={event => event.stopPropagation()}
+                        onDragOver={event => event.stopPropagation()}
+                        onDrop={event => event.stopPropagation()}
+                    >
+                        <header className="flex h-12 shrink-0 items-center justify-between border-b border-gray-200 px-4 text-slate-800">
+                            <div className="min-w-0 truncate text-sm font-semibold">
+                                Workspace chat{workspaceReaderContext ? ` · ${workspaceReaderContext.title}` : workspaceChatContext ? ` · ${workspaceChatContext.title}` : ''}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const editorWidth = editingNodeId ? workspaceEditorWidth : 0;
+                                    setViewport(current => ({
+                                        ...current,
+                                        x: current.x + (workspaceChatWidth + editorWidth) / 2,
+                                    }));
+                                    setWorkspaceChatWidth(0);
+                                    setIsWorkspaceChatOpen(false);
+                                    setWorkspaceChatContext(null);
+                                    setWorkspaceReaderContext(null);
+                                }}
+                                className="rounded-md p-1.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+                                aria-label="Close workspace chat"
+                            >
+                                <X size={18} />
+                            </button>
+                        </header>
+                        <div className="min-h-0 flex-1 overflow-hidden">
+                            <AICollaborate
+                                sessionId={sessionId}
+                                socket={socket}
+                                workspaceInfoFromHome={workspaceInfoFromHome}
+                                projectInfo={projectInfo}
+                                projectContext={projectContext}
+                                onAgentModeChange={onAgentModeChange}
+                                currentAgentMode={currentAgentMode}
+                                currentAgentType={currentAgentType}
+                                onApplyNote={handleApplyNoteToSelection}
+                                onModelChange={onModelChange}
+                                currentModel={selectedModel}
+                                userinfo={userinfo}
+                                initialCanvasContext={workspaceChatContext}
+                                readerContext={workspaceReaderContext}
+                                compact
+                            />
+                        </div>
+                    </section>
+                )}
+
+                {isWorkspaceChatOpen && (
+                    <>
+                        <button
+                            type="button"
+                            className="fixed inset-y-0 z-[85] w-2 cursor-col-resize touch-none bg-gray-500/20 transition-colors hover:bg-blue-400/50 active:bg-blue-500/70"
+                            style={{ right: Math.max(0, workspaceChatWidth - 4) }}
+                            onPointerDown={event => startDockResize('chat', event)}
+                            aria-label={editingNodeId ? 'Resize editor and AI chat split' : 'Resize AI chat width'}
+                            title={editingNodeId ? 'Drag to resize the editor and chat split' : 'Drag to resize AI chat'}
+                        />
+                    </>
+                )}
 
                 <div
+                    className="absolute inset-y-0 left-0 overflow-hidden transition-[width] duration-200"
+                    style={{
+                        width: !isWorkspaceChatOpen
+                            ? '100%'
+                            : editingNodeId
+                                ? '0px'
+                                : `max(0px, calc(100% - ${workspaceChatWidth}px))`
+                    }}
+                >
+                  <div
                     className="origin-top-left w-full h-full select-none"
                     style={{
                         transform,
                         transformOrigin: '0 0',
                     }}
-                >
+                  >
                     {visibleGroups.map(group => (
                         <GroupContainer
                             key={group.id}
@@ -2637,6 +3408,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             onRename={(id, title) => handleUpdateNodeTitle(id, title)}
                             onStartConnect={handleStartConnect}
                             isSelected={selectedId === group.id}
+                            operationStatus={nodeOperations[group.id]}
                         />
                     ))}
 
@@ -2669,32 +3441,60 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             onEditContent={(nodeId) => setEditingNodeId(nodeId)}
                             onOpenPDFReader={handleOpenPDFReader}
                             onOpenSource={handleOpenSource}
+                            onOpenLink={openEditorLink}
+                            operationStatus={nodeOperations[node.id]}
                         />
                     ))}
+                  </div>
                 </div>
-                <Minimap
+                {!isWorkspaceChatOpen && <Minimap
                     nodes={renderNodes} // Use renderNodes so it includes filtered/processed nodes
                     viewport={viewport}
                     scale={scale}
                     setViewport={setViewport}
                     screenWidth={windowSize.w}
                     screenHeight={windowSize.h}
-                />
+                />}
                 {editingNode && (
-                    editingNode.projectNoteId ? (
+                    editingNode.type === 'whiteboard' ? (
+                        <WhiteboardEditorSidebar
+                            nodeId={editingNode.id}
+                            title={editingNode.title}
+                            content={editingNode.content || ''}
+                            isOpen={!!editingNodeId}
+                            onClose={() => setEditingNodeId(null)}
+                            onWhiteboardChange={(changes) => handleUpdateWhiteboard(editingNode.id, changes)}
+                            dockOffsetPx={isWorkspaceChatOpen ? workspaceChatWidth : 0}
+                            widthPx={workspaceEditorWidth}
+                        />
+                    ) : editingNode.projectNoteId ? (
                         <SessionNoteEditor
                             sessionId={editingNode.projectNoteId}
+                            rightOffsetPx={isWorkspaceChatOpen ? workspaceChatWidth + 8 : 8}
+                            widthPx={workspaceEditorWidth}
                             onClose={() => {
                                 setEditingNodeId(null);
                             }}
                         />
                     ) : (
                         <EditorSidebar
-                            nodeId={editingNode.id}
+                            nodeId={editingNode.kind === 'card' && editingNode.cardId ? editingNode.cardId : editingNode.id}
+                            title={editingNode.title}
                             content={editingNode.content}
+                            accessToken={accessToken}
+                            model={selectedModel}
                             onContentChange={(html) => handleUpdateNodeContent(editingNode.id, html)}
+                            onUploadImage={(file) => handleUploadEditorImage(editingNode.id, file)}
                             isOpen={!!editingNodeId}
                             onClose={() => setEditingNodeId(null)}
+                            linkTargets={editorLinkTargets}
+                            onOpenLink={openEditorLink}
+                            dockOffsetPx={isWorkspaceChatOpen ? workspaceChatWidth : 0}
+                            widthPx={workspaceEditorWidth}
+                            onExploreInDepth={() => {
+                                onExploreInDepth?.({ title: editingNode.title || 'Untitled', content: editingNode.content || '' });
+                                setEditingNodeId(null);
+                            }}
                         />
                     )
                 )}
@@ -2704,22 +3504,18 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
                     if (pdfNode && pdfNode.pdfUrl) {
                         return (
-                            <div className="absolute right-0 top-0 h-full w-2/5 bg-white shadow-2xl z-50 border-l border-gray-200">
+                            <div
+                                className="absolute right-0 top-0 h-full bg-white shadow-2xl z-50 border-l border-gray-200 transition-[width] duration-300 ease-in-out"
+                                style={{ width: isPDFReaderExpanded ? '70%' : '40%' }}
+                            >
                                 <div className="h-full flex flex-col">
                                     <div className="bg-gray-900 text-white p-4 flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
-                                            <FileText size={20} />
-                                            <div>
-                                                <h3 className="font-semibold">
-                                                    {pdfNode.fileName || pdfNode.title || 'PDF Document'}
-                                                </h3>
-                                                <p className="text-xs text-gray-300">Select content to add as child nodes</p>
-                                            </div>
-                                        </div>
                                         <button
                                             onClick={() => {
                                                 setPDFReaderVisible(false);
                                                 setActivePDFNode(null);
+                                                setIsPDFReaderExpanded(false);
+                                                setPdfJumpLocation(null);
                                             }}
                                             className="p-2 hover:bg-gray-800 rounded-lg transition"
                                         >
@@ -2733,6 +3529,31 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                             pdfFile={pdfNode.pdfFile || pdfNode.fileName || pdfarray}
                                             onSelectionAdd={handlePDFSelectionAdd}
                                             parentNodeId={activePDFNode}
+                                            canvasId={sessionId}
+                                            accessToken={accessToken}
+                                            isExpanded={isPDFReaderExpanded}
+                                            onToggleExpand={() => setIsPDFReaderExpanded(expanded => !expanded)}
+                                            onAddParsedContentToAI={(title, content) => {
+                                                setWorkspaceReaderContext({ title, content });
+                                                if (!isWorkspaceChatOpen) {
+                                                    const bounds = containerRef.current?.getBoundingClientRect();
+                                                    const chatWidth = bounds
+                                                        ? (bounds.width < 768
+                                                            ? bounds.width * 0.65
+                                                            : Math.min(560, Math.max(320, bounds.width * 0.36)))
+                                                        : 360;
+                                                    const editorWidth = editingNodeId && bounds
+                                                        ? Math.max(160, bounds.width - chatWidth)
+                                                        : 0;
+                                                    if (editingNodeId) setWorkspaceEditorWidth(editorWidth);
+                                                    setWorkspaceChatWidth(chatWidth);
+                                                    setViewport(current => ({
+                                                        ...current,
+                                                        x: current.x - (chatWidth + editorWidth) / 2,
+                                                    }));
+                                                }
+                                                setIsWorkspaceChatOpen(true);
+                                            }}
                                             initialLocation={pdfJumpLocation} />
                                     </div>
                                 </div>

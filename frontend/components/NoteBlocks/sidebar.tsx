@@ -79,6 +79,7 @@ interface ProjectList {
   type: 'personal' | 'group';
   members?: TeamMember[];
   topics: Topic[];
+  workItems?: WorkItem[]; 
   isExpanded: boolean;
   icon?: string;
 }
@@ -112,6 +113,39 @@ interface ProjectSidebarProps {
   activeSession?: {sessionId: string, listId: string, topicId: string, workId: string} | null;
 }
 
+const WorkItemRow: React.FC<{
+  item: WorkItem;
+  isActive: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}> = ({ item, isActive, onSelect, onDelete }) => (
+  <div
+    className={`flex items-center justify-between text-sm group cursor-pointer rounded-md p-2 transition-all duration-200 ${
+      isActive
+        ? 'bg-gradient-to-r from-purple-600/20 to-indigo-600/20 border border-purple-500/40 shadow-md'
+        : 'text-gray-300 bg-gray-900/70 hover:bg-gray-800 border border-transparent'
+    }`}
+    onClick={onSelect}
+  >
+    <div className="flex items-center gap-2 min-w-0 truncate">
+      {isActive && <Activity className="w-3 h-3 text-purple-400 animate-pulse flex-shrink-0" />}
+      {item.type === 'document'
+        ? <FileText className={`w-4 h-4 ${isActive ? 'text-purple-300' : 'text-gray-500'}`} />
+        : item.type === 'note'
+        ? <BookOpen className={`w-4 h-4 ${isActive ? 'text-purple-300' : 'text-gray-500'}`} />
+        : <Hash className={`w-4 h-4 ${isActive ? 'text-purple-300' : 'text-gray-500'}`} />}
+      <div className={`truncate font-medium ${isActive ? 'text-white' : 'text-gray-300'}`}>{item.title}</div>
+      {isActive && (
+        <div className="flex items-center gap-1 text-xs text-purple-300 bg-purple-900/30 px-2 py-0.5 rounded-full">
+          <Zap className="w-3 h-3" /> Active
+        </div>
+      )}
+    </div>
+    <IconButton onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete">
+      <Trash2 className="w-4 h-4 text-red-400" />
+    </IconButton>
+  </div>
+);
 
 const generateSessionId = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -198,6 +232,40 @@ const ConfirmModal: React.FC<{ open: boolean; title?: string; message?: string; 
   );
 };
 
+const DIRECT = ''; // "no topic" sentinel
+
+const normalizeItem = (w: any): WorkItem => ({
+  ...w,
+  sessionId: w?.session_id || w?.sessionId,
+  lastModified: w?.last_modified || w?.lastModified,
+});
+
+// replaces the duplicated mapping in loadProjects AND commitAddWork
+const normalizeProjects = (projects: any[]): ProjectList[] =>
+  projects.map(p => ({
+    ...p,
+    workItems: (p.workItems ?? p.work_items ?? []).map(normalizeItem),
+    topics: Array.isArray(p.topics)
+      ? p.topics.map((t: any) => ({
+          ...t,
+          workItems: (t.workItems ?? t.work_items ?? []).map(normalizeItem),
+        }))
+      : [],
+  }));
+
+// items for a topic, or the list's direct items when topicId === DIRECT
+const getItems = (list: ProjectList | undefined, topicId: string): WorkItem[] =>
+  topicId
+    ? list?.topics.find(t => t.id === topicId)?.workItems ?? []
+    : list?.workItems ?? [];
+
+// immutably update items in either place
+const mapItems = (list: ProjectList, topicId: string, fn: (i: WorkItem[]) => WorkItem[]): ProjectList =>
+  topicId
+    ? { ...list, topics: list.topics.map(t => t.id === topicId ? { ...t, workItems: fn(t.workItems || []) } : t) }
+    : { ...list, workItems: fn(list.workItems || []) };
+
+
 export default function ProjectSidebar({ 
   isCollapsed: externalCollapsed, 
   onToggleCollapse,
@@ -281,30 +349,20 @@ export default function ProjectSidebar({
         if (sessionId && projectLists.length > 0) {
           // Find the work item with this session ID
           for (const list of projectLists) {
-            for (const topic of list.topics) {
-              const workItem = topic.workItems?.find(w => 
-                w.sessionId === sessionId || w.session_id === sessionId
-              );
+            const buckets = [
+              { topicId: DIRECT, items: list.workItems || [] },
+              ...list.topics.map(t => ({ topicId: t.id, items: t.workItems || [] })),
+            ];
+            for (const { topicId, items } of buckets) {
+              const workItem = items.find(w => w.sessionId === sessionId || w.session_id === sessionId);
               if (workItem) {
-                const newActiveSession = {
-                  sessionId,
-                  listId: list.id,
-                  topicId: topic.id,
-                  workId: workItem.id,
-                  worktype: workItem.type
-                };
-                
-                // Only update if it's actually different
-                setUrlActiveSession(prev => {
-                  if (prev?.sessionId === newActiveSession.sessionId && 
-                      prev?.listId === newActiveSession.listId &&
-                      prev?.topicId === newActiveSession.topicId &&
-                      prev?.workId === newActiveSession.workId) {
-                    return prev; 
-                  }
-                  return newActiveSession;
-                });
-                return; 
+                const newActiveSession = { sessionId, listId: list.id, topicId, workId: workItem.id, worktype: workItem.type };
+                setUrlActiveSession(prev =>
+                  prev?.sessionId === sessionId && prev?.listId === list.id &&
+                  prev?.topicId === topicId && prev?.workId === workItem.id
+                    ? prev : newActiveSession
+                );
+                return;
               }
             }
           }
@@ -348,29 +406,7 @@ export default function ProjectSidebar({
       try {
         setLoading(true);
         const response = await api.getProjects();
-        
-        const projects = response?.projects || [];
-        const safeProjects = projects.map(project => ({
-          ...project,
-          topics: Array.isArray(project.topics) ? project.topics.map(topic => ({
-            ...topic,
-            workItems: Array.isArray(topic.workItems) 
-              ? topic.workItems.map(workItem => ({
-                  ...workItem,
-                  sessionId: workItem?.session_id || workItem.sessionId,
-                  lastModified: workItem?.last_modified || workItem.lastModified
-                }))
-              : Array.isArray(topic?.work_items) 
-                ? topic?.work_items?.map(workItem => ({
-                    ...workItem,
-                    sessionId: workItem.session_id || workItem.sessionId,
-                    lastModified: workItem.last_modified || workItem.lastModified
-                  }))
-                : []
-          })) : []
-        }));
-        
-        setProjectLists(safeProjects);
+        setProjectLists(normalizeProjects(response?.projects || []));
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load projects');
@@ -400,38 +436,20 @@ export default function ProjectSidebar({
   };
 
   const handleWorkItemSelect = async (listId: string, topicId: string, workId: string) => {
-    const list = projectLists?.find(l => l.id === listId);
-    const topic = list?.topics?.find(t => t.id === topicId);
-    const workItem = topic?.workItems?.find(w => w.id === workId);
+    const list = projectLists.find(l => l.id === listId);
+    const workItem = getItems(list, topicId).find(w => w.id === workId);
     const worktype = workItem?.type;
-    
-    let sessionId = workItem?.sessionId;
-    
-    // Only generate new session ID if none exists
+    let sessionId = workItem?.sessionId;    
+
     if (!sessionId) {
-      console.log("⚡ Generating new session ID...");
       sessionId = generateSessionId();
-      
       try {
-        await api.updateWorkItem(listId, topicId, workId, { 
-          sessionId 
-        });
-        
-        // Update the project lists with new session ID
-        setProjectLists(prev => prev.map(l => 
-          l.id === listId ? {
-            ...l,
-            topics: l.topics.map(t => 
-              t.id === topicId ? {
-                ...t,
-                workItems: t?.workItems?.map(w => 
-                  w.id === workId ? { ...w, sessionId } : w
-                )
-              } : t
-            )
-          } : l
+        await api.updateWorkItem(listId, topicId || null, workId, { sessionId });
+        setProjectLists(prev => prev.map(l =>
+          l.id === listId
+            ? mapItems(l, topicId, items => items.map(w => w.id === workId ? { ...w, sessionId } : w))
+            : l
         ));
-        
       } catch (error) {
         console.error('Failed to save session ID:', error);
         return;
@@ -665,64 +683,27 @@ export default function ProjectSidebar({
 
   const commitAddWork = async (listId: string, topicId: string, title: string, type: WorkItem['type'] = 'document') => {
     if (!title.trim()) return;
-    setInlineAdd(prev => ({ ...prev, isSubmitting: true }));
+    setInlineAdd(prev => ({ ...prev, isSubmitting: true }));  
+
     if (userinfo?.plan === 'free') {
       const list = projectLists.find(l => l.id === listId);
-      const topic = list?.topics?.find(t => t.id === topicId);
-      
-    if (topic && topic.workItems) { // FIX: Check if workItems exists
-      const workspaceCount = topic.workItems.filter(w => w.type === 'whiteboard').length;
-      const canvasCount = topic.workItems.filter(w => w.type === 'document').length;
-      
-      if (type === 'whiteboard' && workspaceCount >= 1) {
-        setError('Free plan allows only 1 workspace per topic. Upgrade to create more.');
+      const items = getItems(list, topicId);
+      const scope = topicId ? 'topic' : 'project';
+      const kind = type === 'whiteboard' ? 'workspace' : 'canvas';
+      if (items.filter(w => w.type === type).length >= 1) {
+        setError(`Free plan allows only 1 ${kind} per ${scope}. Upgrade to create more.`);
         setInlineAdd({ kind: null });
         return;
       }
-      
-      if (type === 'document' && canvasCount >= 1) {
-        setError('Free plan allows only 1 canvas per topic. Upgrade to create more.');
-        setInlineAdd({ kind: null });
-        return;
-      }
-    }
-  }
+    }  
 
     try {
-      const response = await api.createWorkItem(listId, topicId, title.trim(), type);
-      const newWork = response.work_item;
-    
-      // Instead of just updating local state, reload all projects to ensure consistency
-      const refreshedResponse = await api.getProjects();
-      const projects = refreshedResponse?.projects || [];
-      const safeProjects = projects.map(project => ({
-        ...project,
-        topics: Array.isArray(project.topics) ? project.topics.map(topic => ({
-          ...topic,
-          workItems: Array.isArray(topic.workItems) 
-            ? (topic?.workItems || []).map(workItem => ({
-                ...workItem,
-                sessionId: workItem?.session_id || workItem.sessionId,
-                lastModified: workItem?.last_modified || workItem.lastModified
-              }))
-            : Array.isArray(topic?.work_items) 
-              ? topic?.work_items?.map(workItem => ({
-                  ...workItem,
-                  sessionId: workItem.session_id || workItem.sessionId,
-                  lastModified: workItem.last_modified || workItem.lastModified
-                }))
-              : []
-        })) : []
-      }));
-      setProjectLists(safeProjects);
+      const response = await api.createWorkItem(listId, topicId || null, title.trim(), type);
+      const refreshed = await api.getProjects();
+      setProjectLists(normalizeProjects(refreshed?.projects || []));
       setInlineAdd({ kind: null, isSubmitting: false });
-      // Auto-select the newly created work item
-      setTimeout(() => {
-        handleWorkItemSelect(listId, topicId, newWork.id);
-      }, 100);
-      
-    } catch (err) {
-      console.log('Failed to create work item:', err?.message);
+      setTimeout(() => handleWorkItemSelect(listId, topicId, response.work_item.id), 100);
+    } catch (err: any) {
       setError(err?.message);
       setInlineAdd(prev => ({ ...prev, isSubmitting: false }));
     }
@@ -742,12 +723,20 @@ export default function ProjectSidebar({
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const scheduleDeleteList = (listId: string) => {
-    const list = projectLists.find(l => l.id === listId);
-    if (!list) return;
-    const totalItems = list.topics.reduce((s, t) => s + t?.workItems.length, 0);
-    setConfirmState({ open: true, id: listId, type: 'list', meta: { name: list.name, topics: list.topics?.length || 0, totalItems } });
-  };
+const scheduleDeleteList = (listId: string) => {
+  const list = projectLists.find(l => l.id === listId);
+  if (!list) return;
+  const totalItems =
+    (list.workItems?.length || 0) +
+    list.topics.reduce((s, t) => s + (t?.workItems?.length || 0), 0);
+
+  setConfirmState({
+    open: true,
+    id: listId,
+    type: 'list',
+    meta: { name: list.name, topics: list.topics.length, totalItems },
+  });
+};
 
   const scheduleDeleteTopic = (listId: string, topicId: string) => {
     const topic = projectLists.find(l => l.id === listId)?.topics.find(t => t.id === topicId);
@@ -771,9 +760,11 @@ export default function ProjectSidebar({
         setProjectLists(prev => prev.map(l => l.id === listId ? ({ ...l, topics: l.topics.filter(t => t.id !== id) }) : l));
       }
       if (type === 'work' && id) {
-        const { listId, topicId } = meta;
-        await api.deleteWorkItem(listId, topicId, id);
-        setProjectLists(prev => prev.map(l => l.id === listId ? ({ ...l, topics: l.topics.map(t => t.id === topicId ? ({ ...t, workItems: t?.workItems.filter(w => w.id !== id) }) : t) }) : l));
+        const { listId, topicId } = meta;           // topicId may be ''
+        await api.deleteWorkItem(listId, topicId || null, id);
+        setProjectLists(prev => prev.map(l =>
+          l.id === listId ? mapItems(l, topicId, items => items.filter(w => w.id !== id)) : l
+        ));
       }
     } catch (err) {
       console.error('Failed to delete:', err);
@@ -911,7 +902,7 @@ export default function ProjectSidebar({
               <div className="text-xs text-gray-500">Channels · lists · topics</div>
             </div>
             <div className="ml-auto flex items-center gap-2 text-xs text-gray-400">
-              <div className="px-2 py-1 rounded bg-gray-800">{projectLists.reduce((s, l) => s + (l?.topics?.reduce((x, t) => x + (t?.workItems?.length || 0), 0) || 0), 0)} entries</div>
+              <div className="px-2 py-1 rounded bg-gray-800">{projectLists.reduce((s, l) => s + (l.workItems?.length || 0) + (l.topics?.reduce((x, t) => x + (t?.workItems?.length || 0), 0) || 0), 0)} entries</div>
               <IconButton subtle title="More">
                 <MoreHorizontal className="w-4 h-4 text-gray-400" />
               </IconButton>
@@ -1075,7 +1066,7 @@ export default function ProjectSidebar({
                           <AnimatePresence>
                             {list.isExpanded && editingListId !== list.id && (
                               <motion.div layout initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mt-3 pl-10 space-y-3">
-                                {list.topics.length === 0 && (<div className="text-xs text-gray-500">No topics yet — add one.</div>)}
+                                {list.topics.length === 0 && !(list.workItems?.length) && (<div className="text-xs text-gray-500">No topics yet — add one.</div>)}
 
                                 {list.topics.map(topic => {
                                   if (searchQuery && !matches(topic.name) && !topic.workItems.some(w => matches(w.title))) return null;
@@ -1156,6 +1147,33 @@ export default function ProjectSidebar({
                                   );
                                 })}
 
+                                {(list.workItems || [])
+                                  .filter(w => !searchQuery || matches(w.title))
+                                  .map(w => (
+                                    <WorkItemRow
+                                      key={w.id}
+                                      item={w}
+                                      isActive={isWorkItemActive(list.id, DIRECT, w.id)}
+                                      onSelect={() => handleWorkItemSelect(list.id, DIRECT, w.id)}
+                                      onDelete={() => scheduleDeleteWork(list.id, DIRECT, w.id)}
+                                    />
+                                  ))}
+
+                                {inlineAdd.kind === 'work' && inlineAdd.listId === list.id && inlineAdd.topicId === DIRECT ? (
+                                  <div className="bg-gray-900 rounded p-2">
+                                    <WorkAddRow
+                                      onCancel={() => setInlineAdd({ kind: null })}
+                                      onSave={(title, type) => commitAddWork(list.id, DIRECT, title, type)}
+                                      inputRef={inputRef}
+                                      isSubmitting={inlineAdd.isSubmitting}
+                                    />
+                                  </div>
+                                ) : (
+                                  <button onClick={() => startAddWork(list.id, DIRECT)} className="text-xs text-gray-500 py-1 flex items-center gap-2 hover:text-gray-300">
+                                    <Plus className="w-3 h-3" /> Add content
+                                  </button>
+                                )}
+                                
                                 {inlineAdd.kind === 'topic' && inlineAdd.listId === list.id ? (
                                   <div className="bg-gray-900 rounded p-2">
                                     <InlineEditor initial="" placeholder="New topic name..." autoFocus onCancel={() => setInlineAdd({ kind: null })} onSave={(v) => commitAddTopic(list.id, v)} />
@@ -1179,6 +1197,7 @@ export default function ProjectSidebar({
                                       )}
                                     </button>
                                 )}
+
                               </motion.div>
                             )}
                           </AnimatePresence>
@@ -1467,7 +1486,7 @@ function WorkAddRow({
   isSubmitting?: boolean;
 }) {
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<WorkItem['type']>('whiteboard');
+  const [type, setType] = useState<WorkItem['type']>('document');
 
   const handleSave = () => {
     if (title.trim()) {
@@ -1494,7 +1513,7 @@ function WorkAddRow({
         onChange={(e) => setType(e.target.value as WorkItem['type'])}
         className="w-full mt-2 px-2 py-1.5 text-xs text-gray-200 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
       >
-        <option value="whiteboard">Workspace</option>
+        {/* <option value="whiteboard">Workspace</option> */}
         <option value="document">Creative_canvas</option>
       </select>
 

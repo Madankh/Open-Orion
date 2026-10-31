@@ -125,6 +125,7 @@ class ProjectList(BaseModel):
     owner_id: str
     members: List[TeamMember] = []
     topics: List[Topic] = []
+    work_items: List[WorkItem] = []
     is_expanded: bool = False
     icon: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -136,7 +137,7 @@ class WorkspaceSession(BaseModel):
     session_id: str
     user_id: str
     project_list_id: str
-    topic_id: str
+    topic_id: Optional[str] = None 
     work_item_id: str
     workspace_path: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)

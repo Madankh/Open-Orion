@@ -3,7 +3,7 @@ import { FileText, Image as ImageIcon, Type, ChevronLeft, ChevronRight, ZoomIn, 
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
-import { pythonUrl,nodeUrl } from "../../apiurl"
+import { pythonUrl } from "../../apiurl"
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
@@ -29,7 +29,7 @@ interface Selection {
 interface PDFDoc {
   id: string;
   name: string;
-  file: File;
+  file?: File | string;
   url: string;
   numPages: number;
   uploadedAt: string;
@@ -37,7 +37,7 @@ interface PDFDoc {
 
 interface AdvancedKnowledgeExtractorProps {
   pdfUrl?: string;
-  pdfFile?: File;
+  pdfFile?: File | string;
   onAskAI?: (prompt: string, selection: Selection, pdfUrl?: string) => void;
   parentNodeId?: string;
 }
@@ -64,20 +64,37 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
   const documentViewerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  const resolvedPdfUrl = pdfUrl
+    ? (/^(https?:|blob:|data:)/i.test(pdfUrl)
+      ? pdfUrl
+      : `${pythonUrl}${pdfUrl.startsWith('/') ? '' : '/'}${pdfUrl}`)
+    : '';
+
   useEffect(() => {
-    if (pdfUrl && pdfFile && !currentDocument) {
-      const newDoc: PDFDoc = {
-        id: `doc-${Date.now()}`,
-        name: pdfFile.name,
-        file: pdfFile,
-        url: `${pythonUrl}${pdfUrl}`,
-        numPages: 0,
-        uploadedAt: new Date().toISOString()
-      };
-      setCurrentDocument(newDoc);
+    if (!resolvedPdfUrl) {
+      setCurrentDocument(null);
       setCurrentPage(1);
+      setNumPages(0);
+      setActiveSelection(null);
+      return;
     }
-  }, [pdfUrl, pdfFile, currentDocument]);
+    const fileName = pdfFile instanceof File
+      ? pdfFile.name
+      : typeof pdfFile === 'string'
+        ? pdfFile.split(/[\\/]/).pop()
+        : undefined;
+    setCurrentDocument(previous => previous?.url === resolvedPdfUrl ? previous : {
+      id: `doc-${Date.now()}`,
+      name: fileName || 'PDF Document',
+      file: pdfFile,
+      url: resolvedPdfUrl,
+      numPages: 0,
+      uploadedAt: new Date().toISOString(),
+    });
+    setCurrentPage(1);
+    setNumPages(0);
+    setActiveSelection(null);
+  }, [resolvedPdfUrl, pdfFile]);
   const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     if (currentDocument) {
@@ -448,7 +465,7 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
                     }}
                   >
                     <Document 
-                      file={`${pythonUrl}${pdfUrl}`} 
+                      file={currentDocument.url}
                       onLoadSuccess={onDocumentLoadSuccess}
                       loading={
                         <div className="flex items-center justify-center p-12">

@@ -730,7 +730,7 @@ async def create_canvas_agent_for_connection(
     queue = asyncio.Queue()
     tools = []
     if tool_args:
-        tools,embedding_provider = get_system_tools(
+        tools,embedding_provider = await get_system_tools(
             client=llm_client,
             workspace_manager=workspace_manager,
             message_queue=queue,
@@ -1018,7 +1018,7 @@ async def create_agent_for_connection(llm_client: LLMClient, session_id: uuid.UU
     queue = asyncio.Queue()
     tools = []
     if tool_args:
-        tools,embedding_provider = get_system_tools(
+        tools,embedding_provider = await get_system_tools(
             client=llm_client,
             workspace_manager=workspace_manager,
             message_queue=queue,

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { NodeData, ColorTheme } from '@/typings/agent';
 import { COLORS, TEXT_COLORS } from '../CreativeCanvasHelper/components/constants';
 import { GripVertical, ArrowRightCircle } from 'lucide-react';
+import NodeOperationOverlay, { type NodeOperationStatus } from './NodeOperationOverlay';
 
 // Exporting constants for collision detection
 export const GROUP_PADDING = 24;
@@ -15,6 +16,7 @@ interface GroupContainerProps {
   onRename: (id: string, newTitle: string) => void;
   onStartConnect: (id: string) => void;
   isSelected: boolean;
+  operationStatus?: NodeOperationStatus;
 }
 
 // Helper to get group's background color classes
@@ -37,6 +39,7 @@ export const GroupContainer: React.FC<GroupContainerProps> = ({
   onRename,
   onStartConnect,
   isSelected,
+  operationStatus,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState(group.title);
@@ -120,7 +123,7 @@ export const GroupContainer: React.FC<GroupContainerProps> = ({
         top: bounds.y,
         width: bounds.w,
         height: bounds.h,
-        zIndex: 0, // Groups render behind nodes
+        zIndex: operationStatus ? 30 : 0, // Raise an active operation above overlapping nodes.
         pointerEvents: 'auto'
       }}
       // Allow dragging from body if clicking directly on background
@@ -188,6 +191,8 @@ export const GroupContainer: React.FC<GroupContainerProps> = ({
           <ArrowRightCircle size={16} />
         </button>
       </div>
+
+      {operationStatus && <NodeOperationOverlay status={operationStatus} />}
     </div>
   );
 };

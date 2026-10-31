@@ -1312,7 +1312,7 @@ const goToNewerBlocks = useCallback(() => {
               type: fileType as 'pdf' | 'document' | 'image' | 'video',
               name: file.name,
               url: result.file.path,
-              s3_key: result.file.path,
+              s3_key: result.file.s3_key,
               size: file.size,
               blockId: newBlock.id,
               uploadedAt: Date.now(),
@@ -1322,8 +1322,8 @@ const goToNewerBlocks = useCallback(() => {
             addResource(newResource);
             updateBlock(newBlock.id, {
               url: result.file.path,
-              s3_key:result.file.path,
-              serverPath: result.file.saved_path,
+              s3_key: result.file.s3_key,
+              serverPath: result.file.path,
               status: 'uploaded'
             });
 

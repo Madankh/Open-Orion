@@ -68,6 +68,8 @@ const Collab: React.FC = () => {
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [isDesktopSidebarVisible, setIsDesktopSidebarVisible] = useState<boolean>(true);
   const [WorkspaceType , setWorkspaceType] = useState('Home')
+  const [linearContext, setLinearContext] = useState<{ title: string; content: string } | null>(null);
+  const [canvasReturnType, setCanvasReturnType] = useState('document');
 
   const [agentMode, setAgentMode] = useState<string>('normal');
   const [agentType, setAgentType] = useState<string>('normal');
@@ -650,6 +652,18 @@ const Collab: React.FC = () => {
     toast.success('Knowledge applied to canvas');
   };
 
+  const handleExploreCanvasItem = (context: { title: string; content: string }) => {
+    setCanvasReturnType(WorkspaceType);
+    setLinearContext(context);
+    setWorkspaceType('whiteboard');
+    setIsMainPageVisible(true);
+  };
+
+  const handleReturnToCanvas = () => {
+    setWorkspaceType(canvasReturnType);
+    setLinearContext(null);
+  };
+
   const [noteBlocksToAdd, setNoteBlocksToAdd] = useState<Array<{
     content: string;
     timestamp: number;
@@ -1209,6 +1223,20 @@ const Collab: React.FC = () => {
           }}
         >
           <TransitionLoader />
+          {linearContext && (
+            <div className="fixed left-0 right-0 top-[50px] z-[80] flex h-11 items-center justify-between border-b border-slate-700 bg-slate-900 px-4 text-white shadow-lg">
+              <div className="min-w-0 truncate text-sm">
+                Exploring in depth: <span className="font-semibold">{linearContext.title}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleReturnToCanvas}
+                className="ml-3 shrink-0 rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+              >
+                Back to canvas
+              </button>
+            </div>
+          )}
           {!isMobile && isDesktopSidebarVisible && (
             <div
               style={{
@@ -1384,10 +1412,21 @@ const Collab: React.FC = () => {
                       socket={socket}
                       workspaceInfoFromHome={workspaceInfo}
                       projectInfo={projectInfo}
+                      projectContext={{
+                        projectId: activeSession?.listId,
+                        topicId: activeSession?.topicId,
+                        workId: activeSession?.workId,
+                        sessionId: activeSession?.sessionId
+                      }}
                       isConnected={isConnected}
                       userinfo={userinfo}
                       selectedModel={selectedModel}
                       onModelChange={handleModelChange}
+                      onExploreInDepth={handleExploreCanvasItem}
+                      onAgentModeChange={handleAgentModeChange}
+                      currentAgentMode={agentMode}
+                      currentAgentType={agentType}
+                      onApplyNote={handleApplyNote}
                     />
                   </div>
                 </div>
@@ -1445,10 +1484,21 @@ const Collab: React.FC = () => {
                     socket={socket}
                     workspaceInfoFromHome={workspaceInfo}
                     projectInfo={projectInfo}
+                    projectContext={{
+                      projectId: activeSession?.listId,
+                      topicId: activeSession?.topicId,
+                      workId: activeSession?.workId,
+                      sessionId: activeSession?.sessionId
+                    }}
                     isConnected={isConnected}
                     userinfo={userinfo}
                     selectedModel={selectedModel}
                     onModelChange={handleModelChange}
+                    onExploreInDepth={handleExploreCanvasItem}
+                    onAgentModeChange={handleAgentModeChange}
+                    currentAgentMode={agentMode}
+                    currentAgentType={agentType}
+                    onApplyNote={handleApplyNote}
                   />
                 </div>
               </div>
@@ -1628,6 +1678,7 @@ const Collab: React.FC = () => {
                       onModelChange={handleModelChange}  
                       currentModel={selectedModel}        
                       userinfo={userinfo}
+                      initialCanvasContext={linearContext}
                     />
                   </div>
                 </div>
@@ -1799,6 +1850,7 @@ const Collab: React.FC = () => {
                               onModelChange={handleModelChange}  
                               currentModel={selectedModel}        
                               userinfo={userinfo}
+                              initialCanvasContext={linearContext}
                             />
                           </div>
                         </div>
@@ -1824,6 +1876,7 @@ const Collab: React.FC = () => {
                       onModelChange={handleModelChange}  
                       currentModel={selectedModel}        
                       userinfo={userinfo}
+                      initialCanvasContext={linearContext}
                     />
                   )}
                 </div>

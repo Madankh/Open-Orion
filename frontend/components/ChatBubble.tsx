@@ -76,7 +76,7 @@ const ChatBubbleList = ({ messageList, workspaceInfo, handleClickAction,onToggle
               className={`inline-block text-left rounded-lg ${
                 message.role === "user"
                   ? "bg-[#35363a] p-3 text-white max-w-[80%] border border-[#3A3B3F] shadow-sm whitespace-pre-wrap break-words"
-                  : "text-white w-full break-words overflow-wrap-anywhere"
+                  : "text-gray-900 w-full break-words overflow-wrap-anywhere [&_.markdown-body]:!text-gray-900"
               }`}
               initial={{ scale: 0.9 }}
               animate={{ scale: 1 }}
@@ -85,7 +85,7 @@ const ChatBubbleList = ({ messageList, workspaceInfo, handleClickAction,onToggle
               {message.role === "user" ? (
                 <div className="break-words overflow-wrap-anywhere">{message.content}</div>
               ) : (
-                <div className="prose prose-invert max-w-none break-words overflow-wrap-anywhere">
+                <div className="prose max-w-none break-words overflow-wrap-anywhere">
                   <Markdown>{message.content}</Markdown>
                 </div>
               )}

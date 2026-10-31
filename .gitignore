@@ -8,4 +8,5 @@ Backend/.env
 __pycache__/
 *.pyc
 .env
-curiosityenv
+.venv
+venv
