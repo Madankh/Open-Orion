@@ -27,6 +27,7 @@ import { TagFilterBar } from './CreativeCanvasHelper/components/TagFilterBar';
 import {
     collectSmartNodeContext,
     getConnectedNodesWithMedia,
+    buildLiveCanvasChatContext,
     cleanUrlPath,
     buildCanvasQueryPayload,
 } from '../NoteBlocks/CreativeCanvasHelper/components/ContextHelpers';
@@ -240,8 +241,15 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     const [workspaceChatWidth, setWorkspaceChatWidth] = useState(0);
     const [workspaceEditorWidth, setWorkspaceEditorWidth] = useState(700);
     const dockResizeCleanupRef = useRef<(() => void) | null>(null);
-    const [workspaceChatContext, setWorkspaceChatContext] = useState<{ title: string; content: string } | null>(null);
-    const [workspaceReaderContext, setWorkspaceReaderContext] = useState<{ title: string; content: string } | null>(null);
+    const [workspaceChatAnchorId, setWorkspaceChatAnchorId] = useState<string | null>(null);
+    const [workspaceChatContextSentOnOpen, setWorkspaceChatContextSentOnOpen] = useState(false);
+    const [workspaceReaderContext, setWorkspaceReaderContext] = useState<{
+        title: string;
+        content: string;
+        imageData?: string;
+        askImmediately?: boolean;
+        requestId?: string;
+    } | null>(null);
 
     const nodeSaveTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
     const connectionSaveTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
@@ -260,6 +268,25 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     }, [viewport, scale, nodes, connections]);
 
     const containerRef = useRef<HTMLDivElement>(null);
+    const getDockedEditorWidth = useCallback((containerWidth: number, chatWidth: number) => {
+        const availableWidth = Math.max(0, containerWidth - chatWidth);
+        if (!pdfReaderVisible) return Math.min(workspaceEditorWidth, availableWidth);
+
+        const minimumEditorWidth = Math.min(360, availableWidth);
+        const preferredReaderWidth = containerWidth * (isPDFReaderExpanded ? 0.7 : 0.4);
+        const editorWidthForPreferredReader = availableWidth - preferredReaderWidth;
+        return Math.min(
+            workspaceEditorWidth,
+            Math.max(minimumEditorWidth, editorWidthForPreferredReader),
+        );
+    }, [isPDFReaderExpanded, pdfReaderVisible, workspaceEditorWidth]);
+    const openNodeEditor = useCallback((nodeId: string) => {
+        const bounds = containerRef.current?.getBoundingClientRect();
+        if (isWorkspaceChatOpen && bounds) {
+            setWorkspaceEditorWidth(getDockedEditorWidth(bounds.width, workspaceChatWidth));
+        }
+        setEditingNodeId(nodeId);
+    }, [getDockedEditorWidth, isWorkspaceChatOpen, workspaceChatWidth]);
     const animRef = useRef<number>();
     const {
       cards, upsertCards, removeCard, patchCard, updateTags, loadCards,
@@ -2288,6 +2315,18 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
     
     useLayoutEffect(() => { nodesRef.current = renderNodes; }, [renderNodes]);
     const editingNode = renderNodes.find(n => n.id === editingNodeId);
+    const workspaceChatContext = useMemo(
+        () => workspaceChatAnchorId
+            ? buildLiveCanvasChatContext(workspaceChatAnchorId, renderNodes, connections)
+            : null,
+        [workspaceChatAnchorId, renderNodes, connections]
+    );
+
+    useEffect(() => {
+        if (isWorkspaceChatOpen && selectedId && selectedId !== workspaceChatAnchorId) {
+            setWorkspaceChatAnchorId(selectedId);
+        }
+    }, [isWorkspaceChatOpen, selectedId, workspaceChatAnchorId]);
 
     useEffect(() => () => dockResizeCleanupRef.current?.(), []);
 
@@ -2650,7 +2689,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
             content: toEditorHtml(noteContent),
           },
         });
-        setEditingNodeId(newNodeId);
+        openNodeEditor(newNodeId);
         toast.success('Knowledge added inside the group');
         return;
       }
@@ -2678,9 +2717,9 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
         : responseHtml;
 
       handleUpdateNodeContent(selectedNode.id, combinedContent);
-      setEditingNodeId(selectedNode.id);
+      openNodeEditor(selectedNode.id);
       toast.success(selectedNode.kind === 'card' ? 'Knowledge added to card' : 'Knowledge added to node');
-    }, [selectedId, nodesRef, onApplyNote, createNewNode, cards, loadCards, handleUpdateNodeContent]);
+    }, [selectedId, nodesRef, onApplyNote, createNewNode, cards, loadCards, handleUpdateNodeContent, openNodeEditor]);
     
     const handleCreateNode = () => {
         createNewNode({ type: 'text' });
@@ -3157,7 +3196,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                 <div className="w-full pb-2 border-b border-gray-100">
                                     {(selectedNode.projectNoteId || selectedNode.globalNoteId) ? (
                                         <button
-                                            onClick={() => setEditingNodeId(selectedNode.id)}
+                                            onClick={() => openNodeEditor(selectedNode.id)}
                                             className="flex items-center justify-center gap-2 w-full px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors"
                                         >
                                             <BookOpen size={14} />
@@ -3165,7 +3204,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                         </button>
                                     ) : (
                                         <button
-                                            onClick={() => setEditingNodeId(selectedNode.id)}
+                                            onClick={() => openNodeEditor(selectedNode.id)}
                                             className="flex items-center justify-center gap-2 w-full px-3 py-1.5 bg-gray-50 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-100 transition-colors"
                                         >
                                             {selectedNode.type === 'whiteboard' ? <Paintbrush size={14} /> : <FileText size={14} />}
@@ -3282,9 +3321,18 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     onMouseDown={event => event.stopPropagation()}
                     onClick={() => {
                         const selectedNode = renderNodes.find(node => node.id === selectedId);
-                        setWorkspaceChatContext(selectedNode
-                            ? { title: selectedNode.title || 'Untitled', content: selectedNode.content || '' }
-                            : null);
+                        const selectedContext = selectedNode
+                            ? buildLiveCanvasChatContext(selectedNode.id, renderNodes, connections)
+                            : null;
+                        const contextSentOnOpen = !!selectedContext && socket?.readyState === WebSocket.OPEN;
+                        if (contextSentOnOpen && selectedContext) {
+                            socket!.send(JSON.stringify({
+                                type: 'canvas_context_update',
+                                content: { canvas_context: selectedContext.snapshot },
+                            }));
+                        }
+                        setWorkspaceChatContextSentOnOpen(contextSentOnOpen);
+                        setWorkspaceChatAnchorId(selectedNode?.id || null);
                         const bounds = containerRef.current?.getBoundingClientRect();
                         const chatWidth = bounds
                             ? (bounds.width < 768
@@ -3295,7 +3343,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             ? Math.min(280, bounds.width * 0.24)
                             : 0;
                         const editorWidth = editingNodeId && bounds
-                            ? Math.max(160, bounds.width - chatWidth)
+                            ? getDockedEditorWidth(bounds.width, chatWidth)
                             : 0;
                         if (editingNodeId) setWorkspaceEditorWidth(editorWidth);
                         setWorkspaceChatWidth(chatWidth);
@@ -3325,11 +3373,19 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                     >
                         <header className="flex h-12 shrink-0 items-center justify-between border-b border-gray-200 px-4 text-slate-800">
                             <div className="min-w-0 truncate text-sm font-semibold">
-                                Workspace chat{workspaceReaderContext ? ` · ${workspaceReaderContext.title}` : workspaceChatContext ? ` · ${workspaceChatContext.title}` : ''}
+                                Workspace chat{workspaceReaderContext ? ` · ${workspaceReaderContext.title}` : workspaceChatContext ? ` · ${workspaceChatContext.anchor_title}` : ''}
                             </div>
+                            {workspaceChatContext && (
+                                <span className="mr-3 shrink-0 rounded-full bg-blue-50 px-2 py-1 text-[10px] font-medium text-blue-700">
+                                    Live canvas context
+                                </span>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => {
+                                    if (socket?.readyState === WebSocket.OPEN) {
+                                        socket.send(JSON.stringify({ type: 'canvas_context_clear', content: {} }));
+                                    }
                                     const editorWidth = editingNodeId ? workspaceEditorWidth : 0;
                                     setViewport(current => ({
                                         ...current,
@@ -3337,7 +3393,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                     }));
                                     setWorkspaceChatWidth(0);
                                     setIsWorkspaceChatOpen(false);
-                                    setWorkspaceChatContext(null);
+                                    setWorkspaceChatAnchorId(null);
+                                    setWorkspaceChatContextSentOnOpen(false);
                                     setWorkspaceReaderContext(null);
                                 }}
                                 className="rounded-md p-1.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
@@ -3360,7 +3417,8 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                 onModelChange={onModelChange}
                                 currentModel={selectedModel}
                                 userinfo={userinfo}
-                                initialCanvasContext={workspaceChatContext}
+                                canvasContext={workspaceChatContext}
+                                canvasContextSentOnOpen={workspaceChatContextSentOnOpen}
                                 readerContext={workspaceReaderContext}
                                 compact
                             />
@@ -3438,7 +3496,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                             onUpdateSize={handleUpdateNodeSize}
                             onEmbedYoutube={handleEmbedYoutube}
                             onUploadPdf={handleUploadPdf}
-                            onEditContent={(nodeId) => setEditingNodeId(nodeId)}
+                            onEditContent={openNodeEditor}
                             onOpenPDFReader={handleOpenPDFReader}
                             onOpenSource={handleOpenSource}
                             onOpenLink={openEditorLink}
@@ -3501,12 +3559,18 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
 
                 {pdfReaderVisible && activePDFNode && (() => {
                     const pdfNode = nodes.find(n => n.id === activePDFNode);
+                    const occupiedRightPx =
+                        (isWorkspaceChatOpen ? workspaceChatWidth : 0) +
+                        (editingNodeId ? workspaceEditorWidth + (editingNode?.projectNoteId ? 8 : 0) : 0);
 
                     if (pdfNode && pdfNode.pdfUrl) {
                         return (
                             <div
-                                className="absolute right-0 top-0 h-full bg-white shadow-2xl z-50 border-l border-gray-200 transition-[width] duration-300 ease-in-out"
-                                style={{ width: isPDFReaderExpanded ? '70%' : '40%' }}
+                                className="absolute top-0 h-full bg-white shadow-2xl z-50 border-l border-gray-200 transition-[right,width] duration-300 ease-in-out"
+                                style={{
+                                    right: `${occupiedRightPx}px`,
+                                    width: `min(${isPDFReaderExpanded ? '70%' : '40%'}, max(0px, calc(100% - ${occupiedRightPx}px)))`,
+                                }}
                             >
                                 <div className="h-full flex flex-col">
                                     <div className="bg-gray-900 text-white p-4 flex items-center justify-between">
@@ -3533,8 +3597,26 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                             accessToken={accessToken}
                                             isExpanded={isPDFReaderExpanded}
                                             onToggleExpand={() => setIsPDFReaderExpanded(expanded => !expanded)}
-                                            onAddParsedContentToAI={(title, content) => {
-                                                setWorkspaceReaderContext({ title, content });
+                                            onAddParsedContentToAI={(title, content, imageData, askImmediately = false) => {
+                                                setWorkspaceReaderContext({
+                                                    title,
+                                                    content,
+                                                    imageData,
+                                                    askImmediately,
+                                                    requestId: askImmediately ? crypto.randomUUID() : undefined,
+                                                });
+                                                const pdfChatContext = activePDFNode
+                                                    ? buildLiveCanvasChatContext(activePDFNode, renderNodes, connections)
+                                                    : null;
+                                                const contextSentOnOpen = !!pdfChatContext && socket?.readyState === WebSocket.OPEN;
+                                                if (contextSentOnOpen && pdfChatContext) {
+                                                    socket!.send(JSON.stringify({
+                                                        type: 'canvas_context_update',
+                                                        content: { canvas_context: pdfChatContext.snapshot },
+                                                    }));
+                                                }
+                                                setWorkspaceChatContextSentOnOpen(contextSentOnOpen);
+                                                setWorkspaceChatAnchorId(activePDFNode);
                                                 if (!isWorkspaceChatOpen) {
                                                     const bounds = containerRef.current?.getBoundingClientRect();
                                                     const chatWidth = bounds
@@ -3543,7 +3625,7 @@ const InfiniteCanvas: React.FC<InfiniteCanvasProps> = ({
                                                             : Math.min(560, Math.max(320, bounds.width * 0.36)))
                                                         : 360;
                                                     const editorWidth = editingNodeId && bounds
-                                                        ? Math.max(160, bounds.width - chatWidth)
+                                                        ? getDockedEditorWidth(bounds.width, chatWidth)
                                                         : 0;
                                                     if (editingNodeId) setWorkspaceEditorWidth(editorWidth);
                                                     setWorkspaceChatWidth(chatWidth);

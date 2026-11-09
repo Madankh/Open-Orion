@@ -709,7 +709,7 @@ class CanvasAgentExecutor(MainAgent):
 
         # CASE B: Current Node is INSIDE A GROUP (Siblings are peers)
         elif is_inside_group:
-            group_name = group_info.get('title') if group_info else "Parent Group"
+            group_name = (group_info.get('group_title') or group_info.get('title')) if group_info else "Parent Group"
             context_parts.append(f"👥 GROUP PEERS (Inside '{group_name}')")
             context_parts.append("-" * 50)
             
@@ -881,8 +881,14 @@ class CanvasAgentExecutor(MainAgent):
                 pdf_files = [f for f in files if f.lower().endswith('.pdf')]
                 if pdf_files:
                     instruction += (
-                        f"\n\n📄 **PDF Files Attached**: Use the `pdf_content_extract` tool to read PDF content **unless the user explicitly asks for internet research or do research s**, in which case use web search tools instead."
-
+                        "\n\nPDF files are attached. For a short document or a known page, use "
+                        "`pdf_content_extract`. For broad questions about longer documents, use "
+                        "`index_documents` when those tools are available and needed, then `search_documents` "
+                        "to retrieve relevant passages. If RAG tools are unavailable, read only the relevant pages. "
+                        "Cite document claims with the provided [filename, p.N] tags and call "
+                        "`verify_citations` before answering when that tool is available. If the PDF has no "
+                        "extractable text, say that rather than guessing. Use web search only when the user "
+                        "asks for outside research."
                     )
     
             user_prompt = self._build_user_instruction(instruction)

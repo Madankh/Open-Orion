@@ -83,6 +83,7 @@ class ConnectionManager:
         self.connection_api_keys: Dict[WebSocket, Dict[str, str]] = {}
         self.connection_model_names: Dict[WebSocket, str] = {}
         self.connection_user_tokens: Dict[WebSocket, str] = {}
+        self.connection_canvas_context_prompts: Dict[WebSocket, str] = {}
         self.workspace_managers = {}
         
     async def add_connection(self, websocket: WebSocket) -> KeepAliveManager:
@@ -105,6 +106,12 @@ class ConnectionManager:
     def set_agent(self, websocket: WebSocket, agent: MainAgent):
         """Set agent for a connection"""
         self.active_agents[websocket] = agent
+
+    def set_canvas_context_prompt(self, websocket: WebSocket, prompt: str):
+        self.connection_canvas_context_prompts[websocket] = prompt
+
+    def get_canvas_context_prompt(self, websocket: WebSocket) -> str:
+        return self.connection_canvas_context_prompts.get(websocket, "")
     
     def get_active_task(self, websocket: WebSocket) -> Optional[asyncio.Task]:
         """Get active task for a connection"""
@@ -246,6 +253,7 @@ async def cleanup_connection(
         # Clear secrets/labels immediately
         connection_manager.connection_api_keys.pop(websocket, None)
         connection_manager.connection_model_names.pop(websocket, None)
+        connection_manager.connection_canvas_context_prompts.pop(websocket, None)
 
         # Collect concurrent cleanup steps
         steps = []

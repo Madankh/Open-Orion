@@ -23,7 +23,7 @@ import { TextSelection } from '@tiptap/pm/state';
 import {
   Bold, Italic, Strikethrough, Underline as UnderlineIcon, Highlighter, Heading1, Heading2, Heading3,
   List, CheckSquare, Link2, Palette, X, Table2, ListOrdered, Code, ChevronRight,
-  Edit3, Paintbrush, Upload, Loader2, Calculator,
+  Edit3, Paintbrush, Upload, Loader2, Calculator, LineChart, ExternalLink,
 } from 'lucide-react';
 import type { WhiteboardBlock } from '@/typings/agent';
 import ReactMarkdown from 'react-markdown';
@@ -39,6 +39,7 @@ import 'highlight.js/styles/github-dark.css';
 import { marked } from 'marked';
 import TableControls from './TableControls';
 import MathPracticePanel from './MathPracticePanel';
+import rehypeCanvasSanitize from './rehypeCanvasSanitize';
 import { normalizeMarkdownContent } from '@/utils/markdown-content';
 
 const WhiteboardCanvas = dynamic(() => import('../../Whiteboard'), {
@@ -193,6 +194,8 @@ const EditorImage = Node.create({
     })];
   },
 });
+
+
 
 // Inline LaTeX node: stored as <span data-type="inline-math" data-latex="...">$...$</span>
 const MathComponent = ({ node, updateAttributes }: any) => {
@@ -455,7 +458,7 @@ export const NodeContentDisplay: React.FC<{
       <div className={`prose prose-sm max-w-none ${scrollableContent ? 'min-h-full' : ''} ${bodyTextColorClass} dark:prose-invert`}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
+          rehypePlugins={[rehypeRaw, rehypeCanvasSanitize, rehypeKatex, rehypeHighlight]}
           components={{
             span: ({ node, ...props }: any) => {
               // Math node saved by the editor
@@ -490,6 +493,7 @@ export const NodeContentDisplay: React.FC<{
                 }}
               />;
             },
+            
             // TABLE WRAPPER (Prevents table from breaking the layout)
             table: ({ node, ...props }) => (
               <div className="overflow-x-auto my-4 rounded-lg border border-border">
@@ -922,6 +926,12 @@ export const EditorSidebar: React.FC<EditorSidebarProps> = ({
 
   useEffect(() => {
     if (editor && isOpen) {
+      // Local editor updates are already serialized HTML. Don't run that HTML
+      // back through the Markdown converter: pasted content can contain text
+      // that looks like Markdown, which may rewrite the document and reset the
+      // selection while the user is typing.
+      if (content === lastEditorHtmlRef.current) return;
+
       const htmlContent = convertMarkdownToHtml(content);
       const currentContent = editor.getHTML();
 
@@ -958,6 +968,7 @@ export const EditorSidebar: React.FC<EditorSidebarProps> = ({
         style={{
           right: dockOffsetPx,
           width: widthPx,
+          maxWidth: `calc(100vw - ${dockOffsetPx}px)`,
           backgroundColor: '#ffffff',
           backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)',
           backgroundSize: '20px 20px',
@@ -992,6 +1003,7 @@ export const EditorSidebar: React.FC<EditorSidebarProps> = ({
               {isUploadingImage ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
               <span className="hidden sm:inline">Image</span>
             </button>
+
             <button
               type="button"
               onClick={() => {
@@ -1015,7 +1027,6 @@ export const EditorSidebar: React.FC<EditorSidebarProps> = ({
           </div>
         </div>
 
-        {/* Editor Content with Bubble & Floating Menus */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain relative">
           <CustomBubbleMenu editor={editor} linkTargets={backlinkTargets} onSelectBacklink={(target, range) => insertSelectedTextLink(target, range)} />
           <TableControls editor={editor} />

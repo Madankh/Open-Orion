@@ -71,7 +71,9 @@ export const CardSearchPalette = ({ open, mode, onClose, search, suggestTags, on
             onClick={() => onPick(c)} onMouseEnter={() => setIdx(i)}
             className={`px-3 py-2 cursor-pointer ${i === idx ? 'bg-blue-50' : ''}`}>
             <div className="text-sm font-medium text-gray-900 truncate">{c.title || 'Untitled'}</div>
-            <div className="text-[11px] text-gray-500 line-clamp-1" dangerouslySetInnerHTML={{ __html: (c.content || '').slice(0, 140) }} />
+            <div className="text-[11px] text-gray-500 line-clamp-1">
+              {(c.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)}
+            </div>
             {!!c.tags?.length && <div className="mt-0.5 text-[10px] text-blue-600">{c.tags.map(t => `#${t}`).join(' ')}</div>}
           </div>
         ))}

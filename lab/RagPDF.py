@@ -123,7 +123,7 @@ class CitationRegistry:
                     bad_quotes.append(quote[:140])
 
         return {
-            "ok": not unverified and not bad_quotes,
+            "ok": not unverified and not bad_quotes and not uncited,
             "citations": found,
             "unverified_citations": unverified,
             "unmatched_quotes": bad_quotes,
@@ -254,20 +254,44 @@ class EmbeddingProvider:
 def resolve_pdf_path(
     workspace_manager: WorkspaceManager, relative_path: str
 ) -> Tuple[bool, str, Optional[Path]]:
-    """Validate a PDF path (forced into uploaded_files/)."""
+    """Resolve a PDF strictly inside this workspace's uploaded_files directory."""
     try:
-        path_obj = Path(relative_path)
-        if "uploaded_files" not in path_obj.parts:
-            relative_path = str(Path("uploaded_files") / path_obj.name)
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            return False, "PDF path is required", None
+        if "\\" in relative_path:
+            return False, "PDF path must use a workspace-relative path", None
 
-        full_path = workspace_manager.workspace_path(Path(relative_path))
+        path_obj = Path(relative_path.strip())
+        if path_obj.is_absolute() or ".." in path_obj.parts:
+            return False, "PDF path must stay inside uploaded_files", None
+
+        if "uploaded_files" in path_obj.parts:
+            upload_index = path_obj.parts.index("uploaded_files")
+            file_parts = path_obj.parts[upload_index + 1:]
+        else:
+            # Preserve the existing convenience behavior for a bare filename.
+            file_parts = (path_obj.name,)
+        if not file_parts or any(part in ("", ".", "..") for part in file_parts):
+            return False, "Invalid PDF path", None
+
+        workspace_root = workspace_manager.root.resolve()
+        upload_root = workspace_manager.workspace_path("uploaded_files").resolve()
+        try:
+            upload_root.relative_to(workspace_root)
+        except ValueError:
+            return False, "PDF upload directory is outside the workspace", None
+        full_path = upload_root.joinpath(*file_parts).resolve()
+        try:
+            full_path.relative_to(upload_root)
+        except ValueError:
+            return False, "PDF path must stay inside uploaded_files", None
 
         if not full_path.exists():
-            return False, f"File not found: {relative_path}", None
+            return False, f"File not found: {full_path.relative_to(upload_root)}", None
         if not full_path.is_file():
-            return False, f"Not a file: {relative_path}", None
+            return False, "PDF path is not a file", None
         if full_path.suffix.lower() != ".pdf":
-            return False, f"Not a PDF: {relative_path}", None
+            return False, "File is not a PDF", None
         return True, "", full_path
     except Exception as e:
         return False, f"Invalid path: {e}", None
@@ -1071,11 +1095,11 @@ class PDFTextReader(AgentPlugin):
 
     name = "pdf_content_extract"
     description = (
-        "🔍 SCOUT (Short Reads Only): Extracts raw text from specific pages (limit 1-5 pages). "
-        "Use ONLY for: 1. Documents under 5 pages. 2. Reading the Table of Contents/Intro (pages 1-3) to plan a RAG strategy. "
+        "🔍 SCOUT: Extracts raw text from a short page range (up to 5 pages per call). "
+        "Use for short PDFs, a known page, or reading the Table of Contents/intro to plan a RAG strategy. "
         "Each page is headed with its citation tag, e.g. [file.pdf, p.2]. "
-        "❌ DO NOT use this to read entire documents longer than 5 pages. "
-        "For documents > 5 pages, you MUST use 'index_documents' instead."
+        "Do not use repeated page reads to process an entire long document. "
+        "For broad questions about documents over 5 pages, use 'index_documents' and 'search_documents' instead."
     )
     input_schema = {
         "type": "object",
@@ -1197,6 +1221,16 @@ class PDFTextReader(AgentPlugin):
                         f"Error: {range_err}",
                         f"Page range validation failed: {range_err}",
                         {"success": False, "error": range_err},
+                    )
+                if end - start + 1 > 5:
+                    message = (
+                        "This PDF reader is limited to 5 pages per call. Choose a narrower page range, "
+                        "or use index_documents and search_documents for broad questions about a long PDF."
+                    )
+                    return AgentImplOutput(
+                        f"Error: {message}",
+                        "PDF page range is too large",
+                        {"success": False, "error": "page_range_too_large", "maximum_pages": 5},
                     )
 
                 text, page_info = self._extract_text_from_pages(doc, start, end, file_name)

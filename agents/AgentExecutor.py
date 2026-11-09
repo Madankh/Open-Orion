@@ -83,6 +83,8 @@ class AgentExecutor(MainAgent):
         
         # Core components
         self.system_prompt = system_prompt
+        self.canvas_context_prompt = ""
+        self._turn_canvas_context_prompt = ""
         self.client = client
         self.context_manager = context_manager
         self.workspace_manager = workspace_manager
@@ -159,6 +161,15 @@ class AgentExecutor(MainAgent):
         self.plan_enforced = False
         self.last_plan_check_turn = 0
         self.plan_drift_warnings = 0
+
+    def set_canvas_context_prompt(self, prompt: str):
+        """Set the active canvas context without adding it to chat history."""
+        self.canvas_context_prompt = prompt or ""
+
+    def _get_effective_system_prompt(self) -> str:
+        if not self._turn_canvas_context_prompt:
+            return self.system_prompt
+        return f"{self.system_prompt}\n\n{self._turn_canvas_context_prompt}"
 
     def _has_active_todo(self) -> bool:
         """Check if there's an active TODO file with incomplete tasks"""
@@ -938,6 +949,19 @@ class AgentExecutor(MainAgent):
         
         if files:
             instruction += self._build_file_list(files)
+            pdf_files = [file for file in files if str(file).lower().split('?', 1)[0].endswith('.pdf')]
+            if pdf_files:
+                instruction += (
+                    "\n\nAttached PDF guidance:\n"
+                    "- For a short PDF or a question about a known page, read the relevant pages with "
+                    "`pdf_content_extract`.\n"
+                    "- For broad questions about a long PDF or questions comparing document passages, "
+                    "use `index_documents` when available and needed, then retrieve relevant passages with "
+                    "`search_documents`. If RAG tools are unavailable, read only the relevant pages.\n"
+                    "- Base document claims on the extracted or retrieved text. Cite those claims with the "
+                    "provided [filename, p.N] tags, and use `verify_citations` before answering when that tool "
+                    "is available. If the PDF has no extractable text, say that rather than guessing."
+                )
             # self.local_input_tokens += self.tokenizer.count_tokens(files)
             
         actual_user_request = self._extract_user_request(instruction)
@@ -1037,20 +1061,36 @@ class AgentExecutor(MainAgent):
     
             try:
                 all_tool_params = self._validate_tool_parameters()
-                truncated_messages = self.context_manager.apply_truncation_if_needed(
-                    self.history.get_messages_for_llm()
-                )
-                self.history.set_message_list(truncated_messages)
-                prompt_tokens = self.tokenizer.count_tokens(self.system_prompt)
-                self.local_input_tokens += prompt_tokens
+                effective_system_prompt = self._get_effective_system_prompt()
+                prompt_tokens = self.tokenizer.count_tokens(effective_system_prompt)
                 tools_str = str(all_tool_params)
                 tool_def_tokens = self.tokenizer.count_tokens(tools_str)
-                self.local_input_tokens += tool_def_tokens
+
+                context_manager_budget = getattr(self.context_manager, "_token_budget", None)
+                canvas_context_tokens = self.tokenizer.count_tokens(self._turn_canvas_context_prompt)
+                if isinstance(context_manager_budget, int) and canvas_context_tokens:
+                    self.context_manager._token_budget = max(
+                        1000,
+                        context_manager_budget - canvas_context_tokens,
+                    )
+                    try:
+                        truncated_messages = self.context_manager.apply_truncation_if_needed(
+                            self.history.get_messages_for_llm()
+                        )
+                    finally:
+                        self.context_manager._token_budget = context_manager_budget
+                else:
+                    truncated_messages = self.context_manager.apply_truncation_if_needed(
+                        self.history.get_messages_for_llm()
+                    )
+
+                self.history.set_message_list(truncated_messages)
+                self.local_input_tokens += prompt_tokens + tool_def_tokens
                 response_generator = self.client.generate(
                     messages=self.history.get_messages_for_llm(),
                     max_tokens=self.max_output_tokens,
                     tools=all_tool_params,
-                    system_prompt=self.system_prompt,
+                    system_prompt=effective_system_prompt,
                 )
                 self.partial_tool_calls.clear()
                 full_text_content = ""
@@ -1984,8 +2024,19 @@ class AgentExecutor(MainAgent):
         separator = "-" * 30 + f" {log_type.value} " + "-" * 30
         self.logger_for_agent_logs.info(f"\n{separator}\n")
 
-    async def run_agent(self, instruction: str, files: Optional[List[str]] = None, resume: bool = False) -> tuple[str, Any]:
+    async def run_agent(
+        self,
+        instruction: str,
+        files: Optional[List[str]] = None,
+        resume: bool = False,
+        canvas_context_prompt: Optional[str] = None,
+    ) -> tuple[str, Any]:
         """High-level method to run the agent with an instruction."""
+        self._turn_canvas_context_prompt = (
+            self.canvas_context_prompt
+            if canvas_context_prompt is None
+            else canvas_context_prompt
+        )
         self.tool_manager.reset()
         should_resume, reason = self._should_resume_task(instruction, resume)
         

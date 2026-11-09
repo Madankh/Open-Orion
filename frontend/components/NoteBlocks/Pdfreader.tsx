@@ -396,7 +396,12 @@ interface AdvancedKnowledgeExtractorProps {
   parentNodeId?: string;
   canvasId?: string;
   accessToken?: string;
-  onAddParsedContentToAI?: (title: string, content: string) => void;
+  onAddParsedContentToAI?: (
+    title: string,
+    content: string,
+    imageData?: string,
+    askImmediately?: boolean,
+  ) => void;
   initialLocation?: {
     pageNumber: number;
     boundingBox: { x: number; y: number; width: number; height: number };
@@ -1051,10 +1056,18 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
     setActiveSelection(null);
   }, [onSelectionAdd, currentDocument]);
 
-  const addChatContext = useCallback((contextTitle: string, content: string, imageData?: string) => {
+  const addChatContext = useCallback((
+    contextTitle: string,
+    content: string,
+    imageData?: string,
+    askImmediately = false,
+  ) => {
+    if (onAddParsedContentToAI) {
+      if (content || imageData) onAddParsedContentToAI(contextTitle, content, imageData, askImmediately);
+      return;
+    }
     setChatContext(prev => [...prev, { id: `ctx-${Date.now()}-${prev.length}`, title: contextTitle, content, imageData }]);
     setPanel('chat');
-    if (content) onAddParsedContentToAI?.(contextTitle, content);
   }, [onAddParsedContentToAI]);
 
   const addParsedElementToCanvas = useCallback(async (element: ParsedElement, cropRegion = false) => {
@@ -1576,7 +1589,7 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
                   <button type="button" onClick={() => void addParsedElementToCanvas(selectedElement, true)} className="rounded-md bg-amber-600 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-amber-700">Save image crop</button>
                 )}
                 {hasText && (
-                  <button type="button" onClick={() => addChatContext(`${title} · page ${n}`, text)} className="rounded-md border border-neutral-200 px-2.5 py-1.5 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50">Ask AI</button>
+                  <button type="button" onClick={() => addChatContext(`${title} · page ${n}`, text, undefined, true)} className="rounded-md border border-neutral-200 px-2.5 py-1.5 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50">Ask AI</button>
                 )}
               </div>
             </div>
@@ -1607,7 +1620,7 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => { addChatContext(`${title} · page ${n} (area)`, '', jump.imageData); setActiveSelection(null); }}
+                  onClick={() => { addChatContext(`${title} · page ${n} (area)`, '', jump.imageData, true); setActiveSelection(null); }}
                   className="flex items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   <Sparkles size={13} />
@@ -2005,7 +2018,7 @@ const AdvancedKnowledgeExtractor: React.FC<AdvancedKnowledgeExtractorProps> = ({
             type="button"
             title="Ask AI"
             onClick={() => {
-              addChatContext(`${title} · page ${textToolbar.pageNumber}`, textToolbar.content);
+              addChatContext(`${title} · page ${textToolbar.pageNumber}`, textToolbar.content, undefined, true);
               setTextToolbar(null);
               clearBrowserSelection();
             }}

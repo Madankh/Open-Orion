@@ -149,12 +149,39 @@ export interface ConnectedNodeInfo {
   hasImage?: boolean;
 }
 
+export interface LiveCanvasChatContext {
+  anchor_node_id: string;
+  anchor_title: string;
+  snapshot: LiveCanvasSnapshot;
+}
+
+export interface CanvasPdfReference {
+  node_id: string;
+  title: string;
+  file_name: string;
+  s3_key: string;
+}
+
+export interface LiveCanvasSnapshot extends Record<string, unknown> {
+  pdf_files: CanvasPdfReference[];
+}
+
+type CollectionSource<T> = T[] | { current: T[] | null };
+
+const readCollection = <T,>(source: CollectionSource<T>): T[] =>
+  Array.isArray(source) ? source : source.current || [];
+
+const limitContextText = (value: string | undefined, maxLength: number): string => {
+  if (!value || value.length <= maxLength) return value || '';
+  return `${value.slice(0, maxLength)}…`;
+};
+
 
 export const collectSmartNodeContext = (
   nodeId: string,
-  nodesRef: React.RefObject<NodeData[]>
+  nodesSource: CollectionSource<NodeData>
 ): SmartNodeContext => {
-  const nodes = nodesRef.current || [];
+  const nodes = readCollection(nodesSource);
   const currentNode = nodes.find(n => n.id === nodeId);
 
   if (!currentNode) {
@@ -310,11 +337,11 @@ export const collectSmartNodeContext = (
 
 export const getConnectedNodesWithMedia = (
   nodeId: string,
-  connectionsRef: React.RefObject<Connection[]>,
-  nodesRef: React.RefObject<NodeData[]>
+  connectionsSource: CollectionSource<Connection>,
+  nodesSource: CollectionSource<NodeData>
 ): ConnectedNodeInfo[] => {
-  const connections = connectionsRef.current || [];
-  const nodes = nodesRef.current || [];
+  const connections = readCollection(connectionsSource);
+  const nodes = readCollection(nodesSource);
   
   const connectedNodeIds = new Set<string>();
   
@@ -371,9 +398,9 @@ export const cleanUrlPath = (url: string | undefined | null): string => {
 
 export const collectBranchFiles = (
   nodeId: string, 
-  nodesRef: React.RefObject<NodeData[]>
+  nodesSource: CollectionSource<NodeData>
 ): BranchFile[] => {
-  const nodes = nodesRef.current || [];
+  const nodes = readCollection(nodesSource);
   const files: BranchFile[] = [];
 
   nodes.forEach(node => {
@@ -393,6 +420,165 @@ export const collectBranchFiles = (
   });
 
   return files;
+};
+
+export const buildLiveCanvasChatContext = (
+  nodeId: string,
+  nodes: NodeData[],
+  connections: Connection[]
+): LiveCanvasChatContext | null => {
+  const currentNode = nodes.find(node => node.id === nodeId);
+  if (!currentNode) return null;
+
+  const hierarchy = collectSmartNodeContext(nodeId, nodes);
+  const connectedNodes = getConnectedNodesWithMedia(nodeId, connections, nodes);
+  const directConnections = connections.filter(
+    connection => connection.fromId === nodeId || connection.toId === nodeId
+  );
+
+  const objectKeyFromUrl = (value?: string): string => {
+    if (!value) return '';
+    let pathname = value;
+    try {
+      pathname = new URL(value).pathname;
+    } catch {
+      // Canvas nodes can contain either a URL or a workspace-relative path.
+    }
+    const parts = pathname.replace(/^\/+/, '').split('/').filter(Boolean);
+    const uploadsIndex = parts.indexOf('uploaded_files');
+    if (uploadsIndex <= 0 || uploadsIndex === parts.length - 1) return '';
+    const keyParts = parts.slice(0, uploadsIndex + 1);
+    if (keyParts[0] === 'workspace') keyParts.shift();
+    return [...keyParts, ...parts.slice(uploadsIndex + 1)].join('/');
+  };
+  const objectKeyForNode = (node: NodeData): string =>
+    objectKeyFromUrl(node.s3Key) ||
+    objectKeyFromUrl(node.pdfUrl) ||
+    objectKeyFromUrl(node.mediaUrl);
+
+  const relatedPdfNodes: NodeData[] = [];
+  const addRelatedNode = (node?: NodeData) => {
+    if (!node || relatedPdfNodes.some(existing => existing.id === node.id)) return;
+    const fileName = node.fileName || '';
+    const objectKey = objectKeyForNode(node);
+    const isPdf = node.type === 'pdf' || /\.pdf$/i.test(fileName) || /\.pdf$/i.test(objectKey);
+    if (isPdf && objectKey) relatedPdfNodes.push(node);
+  };
+
+  // Prefer the PDF that a text/excerpt node points back to, then its ancestors,
+  // the selected node itself, and directly connected PDFs.
+  if (currentNode.pdfSource?.fileUrl) {
+    addRelatedNode(nodes.find(node =>
+      node.pdfUrl === currentNode.pdfSource?.fileUrl || node.s3Key === currentNode.pdfSource?.fileUrl
+    ));
+  }
+  [...hierarchy.parentChain].reverse().forEach(parent => {
+    addRelatedNode(nodes.find(node => node.id === parent.id));
+  });
+  addRelatedNode(currentNode);
+  directConnections.forEach(connection => {
+    const connectedId = connection.fromId === nodeId ? connection.toId : connection.fromId;
+    addRelatedNode(nodes.find(node => node.id === connectedId));
+  });
+  if (hierarchy.groupInfo?.isQueryingGroup) {
+    nodes.filter(node => node.parentId === nodeId).forEach(addRelatedNode);
+  }
+
+  const pdfFiles = relatedPdfNodes.slice(0, 3).map(node => {
+    const s3Key = objectKeyForNode(node);
+    return {
+      node_id: node.id,
+      title: limitContextText(node.title, 300),
+      file_name: node.fileName || s3Key.split('/').pop() || node.title || 'canvas.pdf',
+      s3_key: s3Key,
+    };
+  });
+  const excerptSourceKey = objectKeyFromUrl(currentNode.pdfSource?.fileUrl);
+  if (excerptSourceKey && !pdfFiles.some(file => file.s3_key === excerptSourceKey)) {
+    pdfFiles.unshift({
+      node_id: currentNode.id,
+      title: limitContextText(currentNode.title, 300),
+      file_name: excerptSourceKey.split('/').pop() || 'source.pdf',
+      s3_key: excerptSourceKey,
+    });
+    pdfFiles.splice(3);
+  }
+
+  const contextNode = (node: NodeData, contentLimit: number) => ({
+    id: node.id,
+    type: node.type,
+    title: limitContextText(node.title, 300),
+    content: limitContextText(node.content, contentLimit),
+    parentId: node.parentId || null,
+    level: node.level,
+    ...(node.youtubeId && { youtubeId: node.youtubeId }),
+    ...(node.fileName && { fileName: node.fileName }),
+    ...(node.pdfSource && { pdfSource: node.pdfSource }),
+  });
+
+  const parentChain = hierarchy.parentChain.slice(-5).map(parent => ({
+    id: parent.id,
+    type: parent.type,
+    title: limitContextText(parent.title, 300),
+    content: limitContextText(parent.content, 1800),
+    isGroup: parent.isGroup,
+    level: parent.level,
+  }));
+
+  const childNodes = hierarchy.childNodes.slice(0, 10).map(child => ({
+    ...child,
+    title: limitContextText(child.title, 300),
+    content: limitContextText(child.content, 900),
+  }));
+
+  const groupInfo = hierarchy.groupInfo
+    ? {
+        group_id: hierarchy.groupInfo.group_id,
+        group_title: limitContextText(hierarchy.groupInfo.group_title, 300),
+        group_type: hierarchy.groupInfo.group_type,
+        is_querying_group: hierarchy.groupInfo.is_querying_group,
+        is_inside_group: hierarchy.groupInfo.is_inside_group,
+        total_children: hierarchy.groupInfo.total_children,
+        statistics: hierarchy.groupInfo.statistics,
+        sibling_count: hierarchy.groupInfo.sibling_count,
+        siblings_preview: hierarchy.groupInfo.siblings_preview,
+      }
+    : null;
+
+  const links = directConnections.slice(0, 12).map(connection => ({
+    id: connection.id,
+    from_id: connection.fromId,
+    to_id: connection.toId,
+    label: limitContextText(connection.label, 300),
+    stroke_style: connection.strokeStyle,
+    arrow_type: connection.arrowType,
+    connected_node_title: limitContextText(
+      nodes.find(node => node.id === (connection.fromId === nodeId ? connection.toId : connection.fromId))?.title,
+      300
+    ),
+  }));
+
+  return {
+    anchor_node_id: currentNode.id,
+    anchor_title: limitContextText(currentNode.title, 300),
+    snapshot: {
+      current_node: contextNode(currentNode, 12000),
+      pdf_files: pdfFiles,
+      parent_chain: parentChain,
+      child_nodes: childNodes,
+      sibling_nodes: hierarchy.siblingNodes.slice(0, 8).map(sibling => ({
+        ...sibling,
+        title: limitContextText(sibling.title, 300),
+      })),
+      group_info: groupInfo,
+      connected_nodes: connectedNodes.slice(0, 12).map(node => ({
+        ...node,
+        title: limitContextText(node.title, 300),
+        content: limitContextText(node.content, 600),
+      })),
+      links,
+    },
+  };
 };
 
 export const buildCanvasQueryPayload = (
@@ -446,6 +632,7 @@ export const buildCanvasQueryPayload = (
           id: currentNode.id,
           type: currentNode.type,
           title: currentNode.title,
+          parentId: currentNode.parentId || null,
           level: currentNode.level,
           position: { x: currentNode.x, y: currentNode.y },
           color: currentNode.color,
@@ -497,7 +684,7 @@ export const buildCanvasQueryPayload = (
         
         // ✅ Group info (full or lightweight)
         ...(nodeContext.groupInfo && {
-          group_context: nodeContext.groupInfo
+          group_info: nodeContext.groupInfo
         }),
         
         connected_nodes: connectedNodes.map(conn => ({

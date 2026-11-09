@@ -13,6 +13,7 @@ puremagic
 pydub 
 SpeechRecognition
 beautifulsoup4 
+nh3>=0.3.7,<0.4.0
 youtube-transcript-api
 pymongo 
 pydantic

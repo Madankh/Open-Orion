@@ -2,9 +2,11 @@ import os
 import re
 import secrets
 import hashlib
+import html
 import redis
+import nh3
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -28,6 +30,86 @@ redis_client = redis.Redis(
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 80 * 1024 * 1024))  # 80MB
 
 logger = logging.getLogger("api_routes")
+
+
+_CANVAS_CONTENT_TAGS = {
+    'a', 'blockquote', 'br', 'caption', 'code', 'del', 'details', 'div', 'em',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'label',
+    'li', 'mark', 'ol', 'p', 'pre', 's', 'span', 'strong', 'sub', 'summary',
+    'sup', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul',
+}
+
+
+def _filter_canvas_content_attribute(tag: str, attribute: str, value: str) -> Optional[str]:
+    """Keep data URLs limited to raster images and constrain editor controls."""
+    if attribute in {'href', 'src'} and value.strip().lower().startswith('data:'):
+        if tag == 'img' and attribute == 'src' and re.fullmatch(
+            r'data:image/(?:png|gif|jpe?g|webp);base64,[a-z0-9+/=]+',
+            value.strip(),
+            re.IGNORECASE,
+        ):
+            return value
+        return None
+
+    if tag == 'input' and attribute == 'type' and value.lower() != 'checkbox':
+        return None
+    if tag == 'summary' and attribute == 'contenteditable' and value.lower() != 'false':
+        return None
+    return value
+
+
+_CANVAS_CONTENT_CLEANER = nh3.Cleaner(
+    tags=_CANVAS_CONTENT_TAGS,
+    clean_content_tags={
+        'embed', 'iframe', 'math', 'noembed', 'noscript', 'object', 'script',
+        'style', 'svg', 'template',
+    },
+    attributes={
+        '*': {'class', 'style', 'title'},
+        'a': {'href', 'target'},
+        'details': {'open'},
+        'img': {'src', 'alt', 'data-s3-key', 'data-pdf-page'},
+        'input': {'type', 'checked', 'disabled'},
+        'li': {'data-type', 'data-checked'},
+        'mark': {'data-color'},
+        'ol': {'start', 'type'},
+        'span': {'data-type', 'data-latex', 'data-display', 'data-note-link-id'},
+        'summary': {'contenteditable'},
+        'td': {'colspan', 'rowspan', 'colwidth'},
+        'th': {'colspan', 'rowspan', 'colwidth'},
+        'ul': {'data-type'},
+    },
+    attribute_filter=_filter_canvas_content_attribute,
+    url_schemes={'http', 'https', 'mailto', 'tel', 'data'},
+    filter_style_properties={
+        'background-color', 'color', 'height', 'max-height', 'max-width', 'text-align',
+        'text-decoration', 'width',
+    },
+    link_rel='noopener noreferrer',
+)
+
+
+_HTML_CODE_BODY = re.compile(r'(?is)(<code\b[^>]*>)(.*?)(</code\s*>)')
+
+
+def _protect_code_examples(content: str) -> Tuple[str, Dict[str, str]]:
+    """Keep Tiptap code-node contents literal while cleaning surrounding HTML."""
+    replacements: Dict[str, str] = {}
+    prefix = f'OPENORIONCODE{secrets.token_hex(16)}'
+
+    def stash(value: str) -> str:
+        token = f'{prefix}{len(replacements)}END'
+        replacements[token] = value
+        return token
+
+    # Tiptap serializes code nodes as <code> text. Escape any raw tags inside
+    # that element so examples stay literal, not executable HTML.
+    def protect_html_code(match: re.Match) -> str:
+        body = html.escape(html.unescape(match.group(2)), quote=False)
+        return f'{match.group(1)}{stash(body)}{match.group(3)}'
+
+    masked = _HTML_CODE_BODY.sub(protect_html_code, content)
+    return masked, replacements
 
 
 class SecurityValidator:
@@ -88,21 +170,6 @@ class SecurityValidator:
         r'exec\s*\(',    # Exec
     ]
     
-    DANGEROUS_CONTENT_PATTERNS = [
-        r'<script[^>]*>',           # Script tags
-        r'javascript:',             # JavaScript protocol
-        r'on\w+\s*=',              # Event handlers (onclick, onerror, etc.)
-        r'data:text/html',         # Data URLs with HTML
-        r'\$\{.*\}',               # Template injection
-        r'<%.*%>',                 # Server-side templates
-        r'\{\{.*\}\}',             # Template injection
-        r'`[^`]*`',                # Backtick execution
-        r'\$\([^)]*\)',            # Command substitution
-        r'eval\s*\(',              # JavaScript eval
-        r'Function\s*\(',          # Function constructor
-        r'setTimeout\s*\(',        # Delayed execution
-        r'setInterval\s*\(',       # Repeated execution
-    ]
     @staticmethod
     def sanitize_url(url: str) -> Optional[str]:
         """
@@ -168,7 +235,7 @@ class SecurityValidator:
     @staticmethod
     def sanitize_content(content: str, max_length: int = 1_000_000) -> Optional[str]:
         """
-        Sanitize user content to prevent XSS and command injection
+        Sanitize rich content as HTML while preserving code samples as text.
         """
         if not content:
             return content
@@ -177,17 +244,20 @@ class SecurityValidator:
             logger.warning(f"Content exceeds max length: {len(content)}")
             return None
         
-        # Check for dangerous patterns
-        content_lower = content.lower()
-        for pattern in SecurityValidator.DANGEROUS_CONTENT_PATTERNS:
-            if re.search(pattern, content, re.IGNORECASE):
-                logger.warning(f"Blocked dangerous content pattern: {pattern}")
-                return None
-        
-        # Remove null bytes
         content = content.replace('\x00', '')
-        
-        return content
+        try:
+            protected_content, replacements = _protect_code_examples(content)
+            sanitized = _CANVAS_CONTENT_CLEANER.clean(protected_content)
+            for token, code_text in replacements.items():
+                sanitized = sanitized.replace(token, code_text)
+            if len(sanitized) > max_length:
+                logger.warning("Sanitized content exceeds max length: %s", len(sanitized))
+                return None
+            return sanitized
+        except Exception as error:
+            # Fail closed if the HTML sanitizer cannot process the submission.
+            logger.warning("Canvas content sanitization failed: %s", type(error).__name__)
+            return None
     
     @staticmethod
     def validate_node_data(node_data: dict) -> Tuple[bool, str]:
@@ -199,15 +269,16 @@ class SecurityValidator:
         if 'content' in node_data and node_data['content']:
             sanitized = SecurityValidator.sanitize_content(node_data['content'])
             if sanitized is None:
-                return (False, "Content contains dangerous patterns")
+                return (False, "Content could not be safely sanitized")
             node_data['content'] = sanitized
         
         # Validate title
         if 'title' in node_data and node_data['title']:
-            sanitized = SecurityValidator.sanitize_content(node_data['title'], max_length=500)
-            if sanitized is None:
-                return (False, "Title contains dangerous patterns")
-            node_data['title'] = sanitized
+            title = node_data['title']
+            if len(title) > 500:
+                return (False, "Title exceeds max length")
+            # Titles are rendered as React text, so keep their literal contents.
+            node_data['title'] = title.replace('\x00', '')
         
         # Validate media_url
         if 'media_url' in node_data and node_data['media_url']:

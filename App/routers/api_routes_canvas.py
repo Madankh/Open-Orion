@@ -180,9 +180,10 @@ class CreateNodeRequest(BaseModel):
 
     @validator('content')
     def sanitize_content(cls, v):
-        if '<script' in v.lower():
-            raise ValueError('Script tags not allowed')
-        return v
+        sanitized = SecurityValidator.sanitize_content(v)
+        if sanitized is None:
+            raise ValueError('Content could not be safely saved')
+        return sanitized
 
 class UpdateNodeRequest(BaseModel):
     content: Optional[str] = None
@@ -320,10 +321,11 @@ class CardCreateRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
     @validator('content')
-    def reject_script_content(cls, value):
-        if '<script' in value.lower():
-            raise ValueError('Script tags not allowed')
-        return value
+    def sanitize_card_content(cls, value):
+        sanitized = SecurityValidator.sanitize_content(value)
+        if sanitized is None:
+            raise ValueError('Content could not be safely saved')
+        return sanitized
 
 
 class CardUpdateRequest(BaseModel):
@@ -338,10 +340,13 @@ class CardUpdateRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
     @validator('content')
-    def reject_script_content(cls, value):
-        if value is not None and '<script' in value.lower():
-            raise ValueError('Script tags not allowed')
-        return value
+    def sanitize_card_content(cls, value):
+        if value is None:
+            return value
+        sanitized = SecurityValidator.sanitize_content(value)
+        if sanitized is None:
+            raise ValueError('Content could not be safely saved')
+        return sanitized
 
 
 class CardBatchRequest(BaseModel):
@@ -3384,28 +3389,28 @@ async def get_session_events(
         if not workspace_info:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        if not projectType:
-            raise HTTPException(status_code=500, detail="Error determining session type")
-        
+        # Derive the session's access scope from the stored workspace record.
+        # The query parameters are retained for older clients, but are not
+        # authoritative and may be absent when AgentOS opens from a canvas.
         access_level = None
-        
-        # User ID Filtering Logic
-        if projectType == "personal":
+        stored_project_id = workspace_info.get("project_id")
+
+        if workspace_info.get("userid") == user_id:
+            project_type = "personal"
             has_access = await check_personal_project_access(workspace_info, user_id)
             if not has_access:
                 raise HTTPException(status_code=403, detail="Not authorized")
             access_level = "owner"
             user_id_filter = user_id
-            
-        elif projectType == "group":
+        else:
+            project_type = "group"
             has_access, access_level = await check_group_project_access(
-                db_manager, workspace_info, user_id, projectId
+                db_manager, workspace_info, user_id,
+                str(stored_project_id) if stored_project_id else None
             )
             if not has_access:
                 raise HTTPException(status_code=403, detail="Not authorized")
             user_id_filter = None
-        else:
-            raise HTTPException(status_code=500, detail=f"Unknown project type: {projectType}")
         
         events = await db_manager.get_session_events(
             session_id=session_uuid,
@@ -3419,7 +3424,7 @@ async def get_session_events(
         if not events:
             return {
                 "success": True,
-                "project_type": projectType,
+                "project_type": project_type,
                 "access_level": access_level,
                 "events": [],
                 "count": 0,
@@ -3438,7 +3443,7 @@ async def get_session_events(
         
         return {
             "success": True,
-            "project_type": projectType,
+            "project_type": project_type,
             "access_level": access_level,
             "events": event_list,
             "count": len(event_list),

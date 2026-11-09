@@ -363,16 +363,10 @@ const Collab: React.FC = () => {
           };
           ws.send(JSON.stringify(workspaceMessage));
 
-          let agent_type = agentType;
-          let agent_mode = agentMode;
-          
-          if(WorkspaceType === "document"){
-            agent_type = "canvas";
-            agent_mode = "creative_canvas";
-          } else {
-            agent_type = "normal";  
-            agent_mode = "normal"; 
-          }
+          // The persistent websocket agent powers AgentOS chat. Canvas node
+          // actions use the dedicated canvas_query route and executor.
+          const agent_type = "normal";
+          const agent_mode = "normal";
           
           setAgentMode(agent_mode);
           setAgentType(agent_type);
@@ -517,11 +511,6 @@ const Collab: React.FC = () => {
     if (socket && socket.readyState === WebSocket.OPEN) {
       let agent_type = agentType;
       let agent_mode = agentMode;
-      
-      if (WorkspaceType === "document") {
-        agent_type = "canvas";
-        agent_mode = "creative_canvas";
-      }
   
       const payloadContent: InitAgentContent = {
         tool_args: {
