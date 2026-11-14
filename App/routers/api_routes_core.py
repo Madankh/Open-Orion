@@ -365,12 +365,7 @@ async def check_math_solution(
     api_key = os.getenv("OPENROUTER_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="AI math checking is not configured on the server.")
-    model = (request.model or os.getenv("MATH_SOLVER_MODEL") or "google/gemini-2.5-flash-lite").strip()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model):
-        raise HTTPException(status_code=400, detail="Invalid math model name.")
-    reviewer_model = (os.getenv("MATH_REVIEWER_MODEL") or model).strip()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", reviewer_model):
-        reviewer_model = model
+    model = "meta/muse-ember"
 
     problem = {
         "problem_statement": expression,
@@ -399,7 +394,7 @@ async def check_math_solution(
 
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key, timeout=60.0, max_retries=0)
+    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=" ", timeout=60.0, max_retries=0)
     try:
         first_response = await client.chat.completions.create(
             model=model,
@@ -1229,16 +1224,11 @@ async def solve_math_with_steps(
     if len(expression) > 20000 or len(task) > 3000 or len(solve_for) > 80 or len(reference_solution) > 20000:
         raise HTTPException(status_code=413, detail="The math problem is too long.")
 
-    api_key = os.getenv("OPENROUTER_KEY")
+    api_key = " "
     if not api_key:
         raise HTTPException(status_code=503, detail="AI math solving is not configured on the server.")
 
-    model = (request.model or os.getenv("MATH_SOLVER_MODEL") or "google/gemini-2.5-flash-lite").strip()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model):
-        raise HTTPException(status_code=400, detail="Invalid math model name.")
-    reviewer_model = (os.getenv("MATH_REVIEWER_MODEL") or model).strip()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", reviewer_model):
-        reviewer_model = model
+    model = "meta/muse-ember"
 
     problem = {
         "problem_statement": expression,
